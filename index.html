@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MTurk HIT Monitor</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+    th { background: #f4f4f4; }
+  </style>
+</head>
+<body>
+  <h1>📥 Accepted HITs Monitor</h1>
+  <table id="hitsTable">
+    <thead>
+      <tr>
+        <th>Requester</th>
+        <th>Title</th>
+        <th>Reward</th>
+        <th>Worker ID</th>
+        <th>Time Left</th>
+        <th>Assignment ID</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    const WEBHOOK_SITE_TOKEN = "80b9e516-aa1b-4893-98d3-f805e22a358f"; // your webhook id
+    async function fetchHits() {
+      try {
+        // webhook.site provides an API endpoint for last requests
+        const res = await fetch(`https://webhook.site/token/${WEBHOOK_SITE_TOKEN}/requests`);
+        const data = await res.json();
+
+        const tbody = document.querySelector("#hitsTable tbody");
+        tbody.innerHTML = "";
+
+        data.data.forEach(req => {
+          try {
+            const body = JSON.parse(req.content);
+            if (body.event === "hit_accepted") {
+              const row = document.createElement("tr");
+              row.innerHTML = `
+                <td>${body.requester}</td>
+                <td>${body.title || "-"}</td>
+                <td>$${body.reward}</td>
+                <td>${body.workerId}</td>
+                <td>${body.timeRemainingSeconds ? Math.floor(body.timeRemainingSeconds/60)+"m" : "-"}</td>
+                <td>${body.assignmentId}</td>
+              `;
+              tbody.appendChild(row);
+            }
+          } catch {}
+        });
+      } catch (e) {
+        console.error("Error fetching webhook data", e);
+      }
+    }
+
+    setInterval(fetchHits, 5000); // refresh every 5s
+    fetchHits();
+  </script>
+</body>
+</html>
