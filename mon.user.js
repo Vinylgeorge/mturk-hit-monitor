@@ -1,8 +1,12 @@
 // ==UserScript==
 // @name        MTurk Queue 
+// @version      1.0
 // @namespace   Violentmonkey Scripts
 // @match       https://worker.mturk.com/tasks
 // @grant       GM_xmlhttpRequest
+// @updateURL    https://raw.github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/mon.user.js
+// @downloadURL  https://raw.github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/mon.user.js
+
 // ==/UserScript==
 
 (function() {
