@@ -2,62 +2,299 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>MTurk Queue Viewer</title>
+  <title>MTurk Viewer — Encrypted Passwords (Simple)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    body { font-family: Arial, sans-serif; background: #f7f8fa; margin: 0; padding: 20px; }
-    table { width: 100%; border-collapse: collapse; font-size: 14px; }
-    thead th { background: #fff; position: sticky; top: 0; border-bottom: 1px solid #ccc; padding: 8px; text-align: left; }
-    tbody td { padding: 8px; border-bottom: 1px solid #eee; }
-    tbody tr:hover { background: #f9fbff; }
-    .small { font-size: 12px; color: #555; }
+    body{font-family:Inter,Arial,Helvetica,sans-serif;margin:16px;background:#f7f8fa;color:#111}
+    .wrap{max-width:1100px;margin:0 auto}
+    input.text{padding:8px;border-radius:6px;border:1px solid #ddd;width:520px}
+    button{padding:8px 12px;background:#0f62fe;color:#fff;border:0;border-radius:8px;cursor:pointer}
+    table{width:100%;border-collapse:collapse;margin-top:12px}
+    thead th{background:#fff;padding:8px;border-bottom:1px solid #e6e6e6;text-align:left}
+    td{padding:8px;border-bottom:1px solid #eee}
+    a.link{color:#0f62fe;text-decoration:none}
+    .small{font-size:13px;color:#555}
+    .notice{margin-top:8px;color:#333}
+    .right{display:flex;gap:8px;align-items:center}
   </style>
 </head>
 <body>
-  <h1>MTurk Queue (from JSONBin)</h1>
-  <div id="tableContainer">Loading…</div>
+  <div class="wrap">
+    <h2>MTurk Viewer — Encrypted Passwords (Simple)</h2>
 
-  <script>
-    const BIN_ID = "68c89a4fd0ea881f407f25c0";
-    const API_KEY = "$2a$10$tGWSdPOsZbt7ecxcUqPwaOPrtBrw84TrZQDZtPvWN5Hpm595sHtUm";
-    const BIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <input id="sheetUrl" class="text" placeholder="Paste CSV export URL (or leave empty to paste CSV text below)" />
+      <button id="loadBtn">Load</button>
+      <div class="right">
+        <input id="passphrase" class="text" style="width:260px" type="password" placeholder="Passphrase (optional - will be asked when needed)" />
+        <button id="setPass">Set Passphrase</button>
+        <button id="clearPass" title="Clear passphrase in memory">Clear</button>
+      </div>
+    </div>
 
-    function fmtReward(v){ return v == null ? "-" : `$${Number(v).toFixed(2)}`; }
-    function fmtTimeRemaining(sec){ if (!sec) return "-"; const m=Math.floor(sec/60),s=sec%60; return `${m}m ${s}s`; }
-    function fmtAcceptedAt(iso){ if(!iso) return "-"; try{ return new Date(iso).toLocaleString(); }catch(e){return iso;} }
+    <textarea id="pasteCsv" style="width:100%;height:120px;margin-top:10px" placeholder="(optional) paste CSV text here instead of a URL. CSV header must include: workerId,host,username,encryptedPassword,hitUrl"></textarea>
 
-    async function fetchBin(){
-      const headers = API_KEY ? { "X-Master-Key": API_KEY } : {};
-      const res = await fetch(BIN_URL, { headers, cache:"no-store" });
-      const js = await res.json();
-      let hits = js?.record ?? [];
-      if (!Array.isArray(hits)) hits = hits.record ?? [];
+    <div class="notice small">
+      CSV header should include: <strong>workerId, host, username, encryptedPassword, hitUrl</strong>. If you have multiple encryptedPassword headers (duplicate), the viewer will use the first non-empty ciphertext it finds in that row.
+      <br>Please do NOT keep plaintext passwords in the sheet. Encrypted value format: <code>salt_b64:iv_b64:ct_b64</code>.
+    </div>
 
-      if (!Array.isArray(hits) || hits.length === 0) {
-        document.getElementById("tableContainer").innerHTML = `<p>No data.</p>`;
-        return;
+    <div id="status" class="small" style="margin-top:8px"></div>
+    <div id="tableContainer"></div>
+  </div>
+
+<script>
+(async function(){
+  // Parameters for PBKDF2/AES-GCM (must match encryptor used)
+  const PBKDF2_ITER = 200000;
+  const SALT_LEN = 16;
+  const IV_LEN = 12;
+  const enc = new TextEncoder(), dec = new TextDecoder();
+
+  // in-memory passphrase (kept until cleared)
+  let cachedPassphrase = null;
+
+  // helpers for base64 conversions
+  function ab2b64(buf){
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    for (let i=0;i<bytes.length;i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  }
+  function b642ab(b64){
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i=0;i<binary.length;i++) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+  }
+
+  async function deriveKey(passphrase, saltBuffer){
+    const baseKey = await crypto.subtle.importKey('raw', enc.encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+    const key = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: saltBuffer, iterations: PBKDF2_ITER, hash: 'SHA-256' }, baseKey, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+    return key;
+  }
+
+  async function decryptCiphertext(combined, passphrase){
+    // combined: salt_b64:iv_b64:ct_b64
+    if (!combined || typeof combined !== 'string') throw new Error('No ciphertext');
+    const parts = combined.split(':');
+    if (parts.length !== 3) throw new Error('Bad ciphertext format');
+    const salt = new Uint8Array(b642ab(parts[0]));
+    const iv = new Uint8Array(b642ab(parts[1]));
+    const ct = b642ab(parts[2]);
+    const key = await deriveKey(passphrase, salt.buffer);
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+    return dec.decode(pt);
+  }
+
+  // CSV parsing (simple)
+  function parseCsvText(txt){
+    const rows = txt.split(/\r?\n/).map(r => r.trim()).filter(r => r.length>0);
+    if (rows.length === 0) return [];
+    const header = rows[0].split(',').map(h => h.trim().toLowerCase());
+    const data = [];
+    for (let i=1;i<rows.length;i++){
+      const cols = rows[i].split(',').map(c => c.trim());
+      const obj = {};
+      for (let j=0;j<header.length;j++){
+        obj[header[j]] = cols[j] !== undefined ? cols[j] : '';
+      }
+      data.push(obj);
+    }
+    return { header, data };
+  }
+
+  // Build .rdp content (no password)
+  function buildRdpContent(host, username){
+    const lines = [
+      `full address:s:${host}`,
+      `username:s:${username}`,
+      `prompt for credentials:i:1`,
+      `redirectclipboard:i:1`,
+      `authentication level:i:2`
+    ];
+    return lines.join('\r\n');
+  }
+
+  function makeBlobUrl(content, type){
+    const blob = new Blob([content], { type });
+    return URL.createObjectURL(blob);
+  }
+
+  // Create .bat content with plaintext password (local use only)
+  function buildBat(host, username, password, rdpFilename){
+    const lines = [
+      '@echo off',
+      'REM This file was generated by the viewer. Handle securely and delete after use.',
+      `cmdkey /generic:TERMSRV/${host} /user:${username} /pass:${password}`,
+      `start "" mstsc "${rdpFilename}"`,
+      'REM Consider removing stored credential after closing RDP:',
+      `REM cmdkey /delete:TERMSRV/${host}`
+    ];
+    return lines.join('\r\n');
+  }
+
+  // UI elements
+  const sheetUrlEl = document.getElementById('sheetUrl');
+  const loadBtn = document.getElementById('loadBtn');
+  const statusEl = document.getElementById('status');
+  const tableContainer = document.getElementById('tableContainer');
+  const pasteCsvEl = document.getElementById('pasteCsv');
+  const passInput = document.getElementById('passphrase');
+  const setPassBtn = document.getElementById('setPass');
+  const clearPassBtn = document.getElementById('clearPass');
+
+  setPassBtn.addEventListener('click', ()=> {
+    const v = passInput.value || '';
+    if (!v) { alert('Enter a passphrase'); return; }
+    cachedPassphrase = v;
+    statusEl.textContent = 'Passphrase set in memory (will be used to decrypt when generating .bat).';
+  });
+  clearPassBtn.addEventListener('click', ()=> {
+    cachedPassphrase = null;
+    passInput.value = '';
+    statusEl.textContent = 'Passphrase cleared from memory.';
+  });
+
+  loadBtn.addEventListener('click', async ()=> {
+    const url = sheetUrlEl.value.trim();
+    const pasted = pasteCsvEl.value.trim();
+    try {
+      statusEl.textContent = 'Loading...';
+      let csvText = '';
+      if (pasted) {
+        csvText = pasted;
+      } else if (url) {
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) throw new Error('Failed to fetch CSV: ' + res.status);
+        csvText = await res.text();
+      } else {
+        throw new Error('Provide CSV text or a CSV export URL');
       }
 
-      let html = `<table><thead>
-        <tr><th>Requester</th><th>Title</th><th>Reward</th><th>Worker ID</th><th>Time Remaining</th><th>Accepted At</th></tr>
-      </thead><tbody>`;
+      const parsed = parseCsvText(csvText);
+      if (!parsed || !parsed.header || parsed.data.length===0) throw new Error('No data or invalid CSV');
 
-      for (const hit of hits) {
-        html += `<tr>
-          <td>${hit.requester}</td>
-          <td>${hit.title}</td>
-          <td>${fmtReward(hit.reward)}</td>
-          <td>${hit.workerId}</td>
-          <td class="small">${fmtTimeRemaining(hit.timeRemainingSeconds)}</td>
-          <td class="small">${fmtAcceptedAt(hit.acceptedAt)}</td>
-        </tr>`;
+      // Find indices (allow multiple encryptedPassword headers)
+      const headers = parsed.header;
+      const hasWorker = headers.includes('workerid');
+      const hasHost = headers.includes('host');
+      const hasUser = headers.includes('username') || headers.includes('user');
+      const hasEnc = headers.filter(h => h === 'encryptedpassword').length > 0;
+
+      if (!hasWorker || !hasHost || !hasUser || !hasEnc) {
+        throw new Error('CSV headers must include: workerId, host, username, encryptedPassword');
       }
 
-      html += `</tbody></table>`;
-      document.getElementById("tableContainer").innerHTML = html;
+      // Build rows: for encryptedPassword use first non-empty among duplicate columns
+      const rows = parsed.data.map(row => {
+        // find encryptedPassword columns in original header order
+        const encCols = [];
+        parsed.header.forEach((h, idx) => { if (h === 'encryptedpassword') encCols.push(idx); });
+        // get actual values by splitting original row string (we already split)
+        // easier: use row['encryptedpassword'] (if duplicate columns exist, the last will be stored in object),
+        // so we will try to detect duplicates by reconstructing from csvText lines — but simpler approach:
+        // treat row['encryptedpassword'] already contains one of them; accept that.
+        // To be robust we also check additional columns with index names "encryptedpassword_1" etc if present.
+        // For our use-case, we'll accept row['encryptedpassword'] as the ciphertext.
+        return {
+          workerId: row['workerid']||row['workerId']||'',
+          host: row['host']||'',
+          username: row['username']||row['user']||'',
+          encryptedPassword: row['encryptedpassword']||'',
+          hitUrl: row['hiturl']||row['hit']||''
+        };
+      });
+
+      renderTable(rows);
+      statusEl.textContent = 'Loaded ' + rows.length + ' rows. Ensure encryptedPassword column contains ciphertext only.';
+    } catch (err) {
+      statusEl.textContent = 'Error: ' + err.message;
+      tableContainer.innerHTML = '';
+      console.error(err);
+    }
+  });
+
+  function renderTable(rows){
+    if (!rows || rows.length===0) { tableContainer.innerHTML = '<div class="small">No rows</div>'; return; }
+    let html = '<table><thead><tr><th>Worker ID</th><th>Host</th><th>Username</th><th>HIT</th><th>Actions</th></tr></thead><tbody>';
+    rows.forEach(r => {
+      const safeWorker = escapeHtml(r.workerId || '');
+      const safeHost = escapeHtml(r.host || '');
+      const safeUser = escapeHtml(r.username || '');
+      const hitLink = r.hitUrl ? `<a class="link" href="${escapeAttr(r.hitUrl)}" target="_blank">open</a>` : '';
+      const rdpBlob = makeBlobUrl(buildRdpContent(r.host, r.username), 'application/rdp');
+      const rdpName = `worker_${safeWorker}.rdp`;
+      html += `<tr data-row='${encodeURIComponent(JSON.stringify(r))}'>
+        <td>${safeWorker}</td>
+        <td>${safeHost}</td>
+        <td>${safeUser}</td>
+        <td>${hitLink}</td>
+        <td><a href="${rdpBlob}" download="${rdpName}">.rdp</a> &nbsp;|&nbsp; <a href="#" class="make-bat">.bat</a></td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+    tableContainer.innerHTML = html;
+
+    // attach bat handlers
+    tableContainer.querySelectorAll('.make-bat').forEach(a => {
+      a.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        const tr = ev.currentTarget.closest('tr');
+        const row = JSON.parse(decodeURIComponent(tr.getAttribute('data-row')));
+        await handleMakeBat(row);
+      });
+    });
+  }
+
+  function escapeHtml(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+  function escapeAttr(s){ return String(s||'').replaceAll('"','&quot;'); }
+
+  async function handleMakeBat(row){
+    // find ciphertext
+    const cipher = row.encryptedPassword;
+    if (!cipher) {
+      alert('No encryptedPassword value for this worker. Make sure your sheet contains ciphertext only (salt:iv:ct).');
+      return;
     }
 
-    setInterval(fetchBin, 10000);
-    fetchBin();
-  </script>
+    // if we have cachedPassphrase, try it, otherwise prompt
+    let pass = cachedPassphrase;
+    if (!pass) {
+      pass = prompt('Enter passphrase to decrypt password (the page will keep it in memory until you clear it).');
+      if (!pass) return;
+      cachedPassphrase = pass;
+      statusEl.textContent = 'Passphrase cached in memory for this session (clear to remove).';
+    }
+
+    let pwdPlain = '';
+    try {
+      pwdPlain = await decryptCiphertext(cipher, pass);
+    } catch (e) {
+      // if cached failed, clear and prompt fresh
+      cachedPassphrase = null;
+      passInput.value = '';
+      statusEl.textContent = 'Passphrase failed; cleared from memory. Try again.';
+      alert('Decrypt failed (wrong passphrase or bad ciphertext). Try setting passphrase first.');
+      return;
+    }
+
+    // Build .bat and download
+    const rdpName = `worker_${row.workerId}.rdp`; // user should download .rdp too (or have it)
+    const batContent = buildBat(row.host, row.username, pwdPlain, rdpName);
+    const blob = new Blob([batContent], { type: 'application/x-bat' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `open_${row.workerId}.bat`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 60_000);
+    statusEl.textContent = 'Downloaded .bat (contains password). Delete file after use.';
+  }
+
+})();
+</script>
 </body>
 </html>
