@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name        MTurk Queue → JSONBin (One Row per Worker)
+// @name        MTurk Queue 
 // @namespace   Violentmonkey Scripts
 // @match       https://worker.mturk.com/tasks
 // @grant       GM_xmlhttpRequest
@@ -7,7 +7,20 @@
 
 (function() {
   'use strict';
+ function schedulePageReload() {
+    // random between 40 and 130 seconds
+    const min = 40, max = 130;
+    const delay = Math.floor(Math.random() * (max - min + 1) + min) * 1000;
 
+    console.log(`[AutoRefresh] Page will reload in ${delay / 1000}s`);
+
+    setTimeout(() => {
+      location.reload();
+    }, delay);
+  }
+
+  // start the first timer
+  schedulePageReload();
   // 🔧 CONFIG
   const BIN_ID = "68c89a4fd0ea881f407f25c0";   // your Bin ID
   const API_KEY = "$2a$10$tGWSdPOsZbt7ecxcUqPwaOPrtBrw84TrZQDZtPvWN5Hpm595sHtUm"; // your API key
