@@ -9,7 +9,7 @@
   'use strict';
  function schedulePageReload() {
     // random between 40 and 130 seconds
-    const min = 40, max = 130;
+    const min = 10, max = 20;
     const delay = Math.floor(Math.random() * (max - min + 1) + min) * 1000;
 
     console.log(`[AutoRefresh] Page will reload in ${delay / 1000}s`);
