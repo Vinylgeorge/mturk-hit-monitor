@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>MTurk Viewer — Flexible CSV</title>
+  <title>MTurk Viewer — RDP + .bat with Encrypted Passwords</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
     body{font-family:Inter,Arial,Helvetica,sans-serif;margin:16px;background:#f7f8fa;color:#111}
@@ -19,17 +19,20 @@
 </head>
 <body>
   <div class="wrap">
-    <h2>MTurk Viewer — Flexible CSV</h2>
+    <h2>MTurk Viewer — RDP + .bat with Encrypted Passwords</h2>
 
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <input id="sheetUrl" class="text" placeholder="Paste CSV export URL (or leave empty to paste CSV text below)" />
       <button id="loadBtn">Load</button>
+      <input id="passphrase" class="text" type="password" placeholder="Passphrase (optional)" style="width:240px">
+      <button id="setPass">Set</button>
+      <button id="clearPass">Clear</button>
     </div>
 
-    <textarea id="pasteCsv" style="width:100%;height:120px;margin-top:10px" placeholder="(optional) paste CSV text here instead of a URL"></textarea>
+    <textarea id="pasteCsv" style="width:100%;height:120px;margin-top:10px" placeholder="(optional) paste CSV text here"></textarea>
 
     <div class="notice small">
-      Required headers (any case, spaces allowed): <strong>workerId, host, username, encryptedPassword</strong>.
+      CSV must include: <strong>workerId, host, username, encryptedPassword</strong> (any case/spaces/semicolon ok).
     </div>
 
     <div id="status" class="small" style="margin-top:8px"></div>
@@ -37,95 +40,87 @@
   </div>
 
 <script>
-(function(){
-  const statusEl = document.getElementById('status');
-  const tableContainer = document.getElementById('tableContainer');
-  const sheetUrlEl = document.getElementById('sheetUrl');
-  const pasteCsvEl = document.getElementById('pasteCsv');
-  const loadBtn = document.getElementById('loadBtn');
+(async function(){
+  // Encryption constants
+  const PBKDF2_ITER = 200000;
+  const enc = new TextEncoder(), dec = new TextDecoder();
+  let cachedPassphrase = null;
+
+  // base64 helpers
+  function b642ab(b64){const binary=atob(b64);const bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);return bytes.buffer;}
+  async function deriveKey(passphrase,salt){const baseKey=await crypto.subtle.importKey('raw',enc.encode(passphrase),'PBKDF2',false,['deriveKey']);return await crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:PBKDF2_ITER,hash:'SHA-256'},baseKey,{name:'AES-GCM',length:256},false,['decrypt']);}
+  async function decryptCiphertext(ciph,pass){const [s,i,c]=ciph.split(':');const salt=new Uint8Array(b642ab(s));const iv=new Uint8Array(b642ab(i));const ct=b642ab(c);const key=await deriveKey(pass,salt.buffer);const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv},key,ct);return dec.decode(pt);}
 
   // tolerant CSV parser
   function parseCsvText(txt){
-    // detect delimiter
     let delimiter = txt.includes(';') && !txt.includes(',') ? ';' : ',';
     const rows = txt.split(/\r?\n/).map(r => r.trim()).filter(r => r.length>0);
-    if (rows.length === 0) return { header: [], data: [] };
-
-    // normalize headers
-    let headerLine = rows[0].replace(/^\uFEFF/, ''); // strip BOM
-    const header = headerLine.split(delimiter).map(h =>
-      h.trim().toLowerCase().replace(/\s+/g,'') // remove spaces
-    );
-
-    const data = [];
-    for (let i=1;i<rows.length;i++){
-      const cols = rows[i].split(delimiter).map(c => c.trim());
-      const obj = {};
-      for (let j=0;j<header.length;j++){
-        const key = header[j];
-        if (!obj[key]) obj[key] = cols[j] || '';
-      }
+    if (!rows.length) return {header:[],data:[]};
+    let headerLine = rows[0].replace(/^\uFEFF/,'');
+    const header = headerLine.split(delimiter).map(h=>h.trim().toLowerCase().replace(/\s+/g,''));
+    const data=[];
+    for(let i=1;i<rows.length;i++){
+      const cols=rows[i].split(delimiter).map(c=>c.trim());
+      const obj={};
+      for(let j=0;j<header.length;j++){obj[header[j]]=cols[j]||'';}
       data.push(obj);
     }
-    return { header, data };
+    return {header,data};
   }
 
-  function escapeHtml(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
-  function escapeAttr(s){ return String(s||'').replaceAll('"','&quot;'); }
+  function buildRdpContent(host,user){
+    return `full address:s:${host}\r\nusername:s:${user}\r\nprompt for credentials:i:1\r\nredirectclipboard:i:1\r\nauthentication level:i:2`;
+  }
+
+  function buildBat(host,user,password,rdpFile){
+    return `@echo off\r\ncmdkey /generic:TERMSRV/${host} /user:${user} /pass:${password}\r\nstart "" mstsc "${rdpFile}"\r\nREM cmdkey /delete:TERMSRV/${host}`;
+  }
+
+  function makeBlobUrl(content,type){return URL.createObjectURL(new Blob([content],{type}));}
+  function escapeHtml(s){return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');}
+  function escapeAttr(s){return String(s||'').replaceAll('"','&quot;');}
+
+  // UI
+  const sheetUrlEl=document.getElementById('sheetUrl'),pasteCsvEl=document.getElementById('pasteCsv'),loadBtn=document.getElementById('loadBtn');
+  const statusEl=document.getElementById('status'),tableContainer=document.getElementById('tableContainer');
+  const passInput=document.getElementById('passphrase'),setPassBtn=document.getElementById('setPass'),clearPassBtn=document.getElementById('clearPass');
+
+  setPassBtn.onclick=()=>{if(passInput.value){cachedPassphrase=passInput.value;statusEl.textContent='Passphrase set.';}};
+  clearPassBtn.onclick=()=>{cachedPassphrase=null;passInput.value='';statusEl.textContent='Passphrase cleared.';};
+
+  loadBtn.onclick=async()=>{
+    try{
+      statusEl.textContent='Loading...';
+      let csvText=pasteCsvEl.value.trim();
+      if(!csvText&&sheetUrlEl.value){const res=await fetch(sheetUrlEl.value,{cache:'no-store'});csvText=await res.text();}
+      const parsed=parseCsvText(csvText);
+      if(!parsed.data.length) throw new Error('No rows found');
+      renderTable(parsed.data);
+      statusEl.textContent=`Loaded ${parsed.data.length} row(s).`;
+    }catch(e){statusEl.textContent='Error: '+e.message;tableContainer.innerHTML='';}
+  };
 
   function renderTable(rows){
-    if (!rows || rows.length===0) { tableContainer.innerHTML = '<div class="small">No rows</div>'; return; }
-    let html = '<table><thead><tr><th>Worker ID</th><th>Host</th><th>Username</th><th>Encrypted</th></tr></thead><tbody>';
-    rows.forEach(r => {
-      const wid = r.workerid || r['workerId'] || '';
-      const host = r.host || '';
-      const user = r.username || r.user || '';
-      const encPwd = r.encryptedpassword || '';
-      html += `<tr>
-        <td>${escapeHtml(wid)}</td>
-        <td>${escapeHtml(host)}</td>
-        <td>${escapeHtml(user)}</td>
-        <td class="small">${escapeHtml(encPwd.slice(0,20))}...</td>
-      </tr>`;
+    let html='<table><thead><tr><th>Worker</th><th>Host</th><th>User</th><th>Actions</th></tr></thead><tbody>';
+    rows.forEach(r=>{
+      const wid=r.workerid||'';const host=r.host||'';const user=r.username||r.user||'';const encPwd=r.encryptedpassword||'';
+      const rdpBlob=makeBlobUrl(buildRdpContent(host,user),'application/rdp');
+      const rdpName=`worker_${wid}.rdp`;
+      html+=`<tr data-row='${encodeURIComponent(JSON.stringify({wid,host,user,encPwd}))}'>
+        <td>${escapeHtml(wid)}</td><td>${escapeHtml(host)}</td><td>${escapeHtml(user)}</td>
+        <td><a href="${rdpBlob}" download="${rdpName}">.rdp</a> | <a href="#" class="make-bat">.bat</a></td></tr>`;
     });
-    html += '</tbody></table>';
-    tableContainer.innerHTML = html;
+    html+='</tbody></table>';tableContainer.innerHTML=html;
+    tableContainer.querySelectorAll('.make-bat').forEach(a=>a.onclick=async(ev)=>{
+      ev.preventDefault();
+      const row=JSON.parse(decodeURIComponent(ev.target.closest('tr').dataset.row));
+      let pass=cachedPassphrase||prompt('Enter passphrase:');if(!pass) return;
+      try{const plain=await decryptCiphertext(row.encPwd,pass);cachedPassphrase=pass;
+        const batContent=buildBat(row.host,row.user,plain,`worker_${row.wid}.rdp`);
+        const url=makeBlobUrl(batContent,'application/x-bat');const dl=document.createElement('a');dl.href=url;dl.download=`open_${row.wid}.bat`;dl.click();
+      }catch(e){alert('Decrypt failed: '+e.message);cachedPassphrase=null;}
+    });
   }
-
-  loadBtn.addEventListener('click', async ()=> {
-    const url = sheetUrlEl.value.trim();
-    const pasted = pasteCsvEl.value.trim();
-    try {
-      statusEl.textContent = 'Loading...';
-      let csvText = '';
-      if (pasted) {
-        csvText = pasted;
-      } else if (url) {
-        const res = await fetch(url, { cache: 'no-store' });
-        if (!res.ok) throw new Error('Failed to fetch CSV: ' + res.status);
-        csvText = await res.text();
-      } else {
-        throw new Error('Provide CSV text or a CSV export URL');
-      }
-
-      const parsed = parseCsvText(csvText);
-      if (!parsed.data.length) throw new Error('No rows found');
-
-      // validate required fields exist
-      const first = parsed.data[0];
-      if (!(first.workerid || first.workerId)) throw new Error('Missing workerId');
-      if (!first.host) throw new Error('Missing host');
-      if (!(first.username || first.user)) throw new Error('Missing username');
-      if (!first.encryptedpassword) throw new Error('Missing encryptedPassword');
-
-      renderTable(parsed.data);
-      statusEl.textContent = 'Loaded ' + parsed.data.length + ' row(s).';
-    } catch (err) {
-      statusEl.textContent = 'Error: ' + err.message;
-      tableContainer.innerHTML = '';
-      console.error(err);
-    }
-  });
 })();
 </script>
 </body>
