@@ -9,6 +9,9 @@
 // @match        https://*.mturk.com/*
 // @grant        none
 // @run-at       document-idle
+// @updateURL    https://raw.github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/refresh.user.js
+// @downloadURL  https://raw.github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/refresh.user.js
+
 // ==/UserScript==
 
 (function () {
