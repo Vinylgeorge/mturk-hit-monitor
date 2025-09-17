@@ -2,107 +2,308 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>MTurk Viewer — WorkerID → RDP</title>
+  <title>MTurk Queue → RDP (click Worker ID)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    body{font-family:Inter,Arial,Helvetica,sans-serif;margin:16px;background:#f7f8fa;color:#111}
-    .wrap{max-width:1100px;margin:0 auto}
-    input.text{padding:8px;border-radius:6px;border:1px solid #ddd;width:520px}
-    button{padding:8px 12px;background:#0f62fe;color:#fff;border:0;border-radius:8px;cursor:pointer}
-    table{width:100%;border-collapse:collapse;margin-top:12px}
-    thead th{background:#fff;padding:8px;border-bottom:1px solid #e6e6e6;text-align:left}
+    body{font-family:Arial,Helvetica,sans-serif;margin:18px;background:#f7f8fa;color:#111}
+    h1{font-size:20px}
+    .controls{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
+    input.text{padding:8px;border-radius:6px;border:1px solid #ddd;width:480px}
+    button{padding:8px 12px;border-radius:8px;border:0;background:#0f62fe;color:#fff;cursor:pointer}
+    table{width:100%;border-collapse:collapse}
+    thead th{background:#fff;padding:8px;border-bottom:1px solid #e6e6e6;text-align:left;position:sticky;top:0}
     td{padding:8px;border-bottom:1px solid #eee}
-    a.link{color:#0f62fe;text-decoration:none}
-    .small{font-size:13px;color:#555}
-    .notice{margin-top:8px;color:#333}
+    a.workerLink{color:#0f62fe;text-decoration:underline;cursor:pointer}
+    .small{font-size:13px;color:#444}
+    .note{margin-top:10px;font-size:13px;color:#333}
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h2>MTurk Viewer — WorkerID → RDP</h2>
+  <h1>MTurk Queue — Click WorkerID to prepare RDP</h1>
 
-    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-      <input id="sheetUrl" class="text" placeholder="Paste CSV export URL (or leave empty to paste CSV text below)" />
-      <button id="loadBtn">Load</button>
-      <input id="passphrase" class="text" type="password" placeholder="Passphrase (for .bat)" style="width:240px">
-      <button id="setPass">Set</button>
-      <button id="clearPass">Clear</button>
-    </div>
-
-    <textarea id="pasteCsv" style="width:100%;height:120px;margin-top:10px" placeholder="(optional) paste CSV text here"></textarea>
-
-    <div class="notice small">
-      CSV must include: <strong>workerId, host, username, encryptedPassword</strong> (any case/spaces/semicolon ok).
-    </div>
-
-    <div id="status" class="small" style="margin-top:8px"></div>
-    <div id="tableContainer"></div>
+  <div class="controls">
+    <input id="sheetUrl" class="text" placeholder="JSONBin URL (optional) or paste CSV below" />
+    <button id="loadBin">Load from JSONBin</button>
+    <input id="passphrase" class="text" placeholder="Passphrase (optional; will be prompted if empty)" style="width:260px" />
+    <button id="setPass">Set Passphrase</button>
+    <button id="clearPass">Clear</button>
   </div>
+
+  <textarea id="pasteCsv" style="width:100%;height:120px" placeholder="(optional) paste CSV text: workerId,host,username,encryptedPassword,hitUrl"></textarea>
+
+  <div class="note small">
+    Click a <strong>Worker ID</strong> to generate <code>.rdp</code> and <code>.bat</code> files. Downloaded <code>.bat</code> contains plaintext password — run it locally (double-click) to add the credential and open Remote Desktop. Delete the file afterwards.
+  </div>
+
+  <div id="status" class="small" style="margin-top:8px"></div>
+  <div id="tableContainer" style="margin-top:12px"></div>
 
 <script>
 (async function(){
-  const PBKDF2_ITER=200000;const enc=new TextEncoder(),dec=new TextDecoder();let cachedPassphrase=null;
-  function b642ab(b64){const binary=atob(b64);const bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);return bytes.buffer;}
-  async function deriveKey(pass,salt){const base=await crypto.subtle.importKey('raw',enc.encode(pass),'PBKDF2',false,['deriveKey']);return await crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:PBKDF2_ITER,hash:'SHA-256'},base,{name:'AES-GCM',length:256},false,['decrypt']);}
-  async function decryptCiphertext(ciph,pass){const [s,i,c]=ciph.split(':');const salt=new Uint8Array(b642ab(s));const iv=new Uint8Array(b642ab(i));const ct=b642ab(c);const key=await deriveKey(pass,salt.buffer);const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv},key,ct);return dec.decode(pt);}
+  // --- Configuration for JSONBin (optional) ---
+  const BIN_ID = "68c89a4fd0ea881f407f25c0";
+  const API_KEY = "$2a$10$tGWSdPOsZbt7ecxcUqPwaOPrtBrw84TrZQDZtPvWN5Hpm595sHtUm";
+  const BIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
 
+  // --- Crypto helpers (PBKDF2 -> AES-GCM) ---
+  const PBKDF2_ITER = 200000;
+  const enc = new TextEncoder(), dec = new TextDecoder();
+
+  function b642ab(b64){
+    const bin = atob(b64);
+    const u = new Uint8Array(bin.length);
+    for (let i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i);
+    return u.buffer;
+  }
+  async function deriveKey(passphrase, saltBuffer){
+    const base = await crypto.subtle.importKey('raw', enc.encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name:'PBKDF2', salt: saltBuffer, iterations: PBKDF2_ITER, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  }
+  async function decryptCiphertext(combined, passphrase){
+    // combined format: salt_b64:iv_b64:ct_b64
+    if (!combined || typeof combined !== 'string') throw new Error('No ciphertext');
+    const parts = combined.split(':');
+    if (parts.length !== 3) throw new Error('Bad ciphertext format');
+    const salt = new Uint8Array(b642ab(parts[0]));
+    const iv = new Uint8Array(b642ab(parts[1]));
+    const ct = b642ab(parts[2]);
+    const key = await deriveKey(passphrase, salt.buffer);
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+    return dec.decode(pt);
+  }
+
+  // --- CSV parser (tolerant) ---
   function parseCsvText(txt){
-    let delimiter=txt.includes(';')&&!txt.includes(',')?';':',';const rows=txt.split(/\r?\n/).map(r=>r.trim()).filter(r=>r.length>0);
-    if(!rows.length) return {header:[],data:[]};let headerLine=rows[0].replace(/^\uFEFF/,'');
-    const header=headerLine.split(delimiter).map(h=>h.trim().toLowerCase().replace(/\s+/g,''));
-    const data=[];for(let i=1;i<rows.length;i++){const cols=rows[i].split(delimiter).map(c=>c.trim());const obj={};for(let j=0;j<header.length;j++){obj[header[j]]=cols[j]||'';}data.push(obj);}return {header,data};
+    if (!txt) return { header: [], data: [] };
+    const delimiter = (txt.includes(';') && !txt.includes(',')) ? ';' : ',';
+    const lines = txt.split(/\r?\n/).map(r => r.trim()).filter(r => r.length>0);
+    if (lines.length === 0) return { header: [], data: [] };
+    let headerLine = lines[0].replace(/^\uFEFF/,'');
+    const header = headerLine.split(delimiter).map(h => h.trim().toLowerCase().replace(/\s+/g,''));
+    const data = [];
+    for (let i=1;i<lines.length;i++){
+      const cols = lines[i].split(delimiter).map(c => c.trim());
+      const obj = {};
+      for (let j=0;j<header.length;j++) obj[header[j]] = cols[j] || '';
+      data.push(obj);
+    }
+    return { header, data };
   }
 
-  function buildRdpContent(host,user){
-    return `full address:s:${host}\r\nusername:s:${user}\r\nprompt for credentials:i:1\r\nredirectclipboard:i:1\r\nauthentication level:i:2`;
+  // --- RDP & BAT creation ---
+  function makeRdpContent(host, username){
+    return [
+      `full address:s:${host}`,
+      `username:s:${username}`,
+      `prompt for credentials:i:1`,
+      `redirectclipboard:i:1`,
+      `authentication level:i:2`
+    ].join('\r\n');
+  }
+  function makeBatContent(host, username, password, rdpFile){
+    return [
+      '@echo off',
+      'REM Generated locally. Treat securely — contains plaintext password.',
+      `cmdkey /generic:TERMSRV/${host} /user:${username} /pass:${password}`,
+      `start "" mstsc "${rdpFile}"`,
+      'REM After closing RDP consider deleting stored credential:',
+      `REM cmdkey /delete:TERMSRV/${host}`
+    ].join('\r\n');
   }
 
-  function buildBat(host,user,password,rdpFile){
-    return `@echo off\r\ncmdkey /generic:TERMSRV/${host} /user:${user} /pass:${password}\r\nstart "" mstsc "${rdpFile}"\r\nREM cmdkey /delete:TERMSRV/${host}`;
-  }
+  // --- UI elements ---
+  const sheetUrlEl = document.getElementById('sheetUrl');
+  const pasteCsvEl = document.getElementById('pasteCsv');
+  const loadBinBtn = document.getElementById('loadBin');
+  const statusEl = document.getElementById('status');
+  const tableContainer = document.getElementById('tableContainer');
+  const passInput = document.getElementById('passphrase');
+  const setPassBtn = document.getElementById('setPass');
+  const clearPassBtn = document.getElementById('clearPass');
 
-  function makeBlobUrl(content,type){return URL.createObjectURL(new Blob([content],{type}));}
-  function escapeHtml(s){return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');}
+  let cachedPassphrase = null;
+  setPassBtn.onclick = ()=>{ cachedPassphrase = passInput.value || null; statusEl.textContent = cachedPassphrase ? 'Passphrase set (in memory).' : 'Empty passphrase set.'; };
+  clearPassBtn.onclick = ()=>{ cachedPassphrase = null; passInput.value=''; statusEl.textContent = 'Passphrase cleared from memory.'; };
 
-  const sheetUrlEl=document.getElementById('sheetUrl'),pasteCsvEl=document.getElementById('pasteCsv'),loadBtn=document.getElementById('loadBtn');
-  const statusEl=document.getElementById('status'),tableContainer=document.getElementById('tableContainer');
-  const passInput=document.getElementById('passphrase'),setPassBtn=document.getElementById('setPass'),clearPassBtn=document.getElementById('clearPass');
+  // load from JSONBin (optional)
+  loadBinBtn.addEventListener('click', async ()=> {
+    try {
+      statusEl.textContent = 'Fetching JSONBin...';
+      const headers = API_KEY ? { "X-Master-Key": API_KEY } : {};
+      const res = await fetch(BIN_URL, { headers, cache: 'no-store' });
+      if (!res.ok) throw new Error('JSONBin fetch failed: ' + res.status);
+      const json = await res.json();
+      let hits = json?.record ?? json;
+      // if wrapped: record.record -> unwrap
+      while (hits && !Array.isArray(hits) && hits.record) hits = hits.record;
+      if (!Array.isArray(hits)) throw new Error('Unexpected JSONBin format');
+      // convert hits to CSV-like objects expected by viewer
+      const rows = hits.map(h => ({
+        workerid: (h.workerId || h.workerid || h.worker || '') +'',
+        host: h.host || h.hostname || h.server || '',
+        username: (h.username || h.user || '') +'',
+        encryptedpassword: (h.encryptedPassword || h.encryptedpassword || '') +'',
+        hiturl: h.url || h.hitUrl || ''
+      }));
+      renderTable(rows);
+      statusEl.textContent = `Loaded ${rows.length} row(s) from JSONBin.`;
+    } catch (e) {
+      statusEl.textContent = 'Error: ' + e.message;
+      console.error(e);
+    }
+  });
 
-  setPassBtn.onclick=()=>{if(passInput.value){cachedPassphrase=passInput.value;statusEl.textContent='Passphrase set.';}};
-  clearPassBtn.onclick=()=>{cachedPassphrase=null;passInput.value='';statusEl.textContent='Passphrase cleared.';};
+  // main load button (CSV or pasted)
+  document.getElementById('loadBin').addEventListener('click', ()=>{}); // already wired above
 
-  loadBtn.onclick=async()=>{
-    try{
-      statusEl.textContent='Loading...';
-      let csvText=pasteCsvEl.value.trim();
-      if(!csvText&&sheetUrlEl.value){const res=await fetch(sheetUrlEl.value,{cache:'no-store'});csvText=await res.text();}
-      const parsed=parseCsvText(csvText);
-      if(!parsed.data.length) throw new Error('No rows found');
-      renderTable(parsed.data);
-      statusEl.textContent=`Loaded ${parsed.data.length} row(s).`;
-    }catch(e){statusEl.textContent='Error: '+e.message;tableContainer.innerHTML='';}
-  };
+  // also allow manual CSV paste conversion
+  pasteCsvEl.addEventListener('blur', ()=> {
+    const txt = pasteCsvEl.value.trim();
+    if (!txt) return;
+    try {
+      const parsed = parseCsvText(txt);
+      const rows = parsed.data.map(r => ({
+        workerid: r.workerid || r.workerid || r.worker || '',
+        host: r.host || '',
+        username: r.username || r.user || '',
+        encryptedpassword: r.encryptedpassword || '',
+        hiturl: r.hiturl || ''
+      }));
+      if (rows.length) { renderTable(rows); statusEl.textContent = `Loaded ${rows.length} row(s) from pasted CSV.`; }
+    } catch (e) {
+      statusEl.textContent = 'CSV parse error: ' + e.message;
+    }
+  });
 
   function renderTable(rows){
-    let html='<table><thead><tr><th>Worker</th><th>Host</th><th>User</th><th>.bat</th></tr></thead><tbody>';
-    rows.forEach(r=>{
-      const wid=r.workerid||'';const host=r.host||'';const user=r.username||r.user||'';const encPwd=r.encryptedpassword||'';
-      const rdpBlob=makeBlobUrl(buildRdpContent(host,user),'application/rdp');const rdpName=`worker_${wid}.rdp`;
-      html+=`<tr data-row='${encodeURIComponent(JSON.stringify({wid,host,user,encPwd}))}'>
-        <td><a href="${rdpBlob}" download="${rdpName}">${escapeHtml(wid)}</a></td>
-        <td>${escapeHtml(host)}</td><td>${escapeHtml(user)}</td>
-        <td><a href="#" class="make-bat">.bat</a></td></tr>`;
-    });
-    html+='</tbody></table>';tableContainer.innerHTML=html;
-    tableContainer.querySelectorAll('.make-bat').forEach(a=>a.onclick=async(ev)=>{
-      ev.preventDefault();const row=JSON.parse(decodeURIComponent(ev.target.closest('tr').dataset.row));
-      let pass=cachedPassphrase||prompt('Enter passphrase:');if(!pass) return;
-      try{const plain=await decryptCiphertext(row.encPwd,pass);cachedPassphrase=pass;
-        const batContent=buildBat(row.host,row.user,plain,`worker_${row.wid}.rdp`);
-        const url=makeBlobUrl(batContent,'application/x-bat');const dl=document.createElement('a');dl.href=url;dl.download=`open_${row.wid}.bat`;dl.click();
-      }catch(e){alert('Decrypt failed: '+e.message);cachedPassphrase=null;}
+    if (!rows || rows.length === 0) { tableContainer.innerHTML = '<div class="small">No rows</div>'; return; }
+    let html = '<table><thead><tr><th>Worker ID</th><th>Host</th><th>User</th><th>HIT</th><th>Actions</th></tr></thead><tbody>';
+    for (const r of rows){
+      const wid = r.workerid || '';
+      const host = r.host || '';
+      const user = r.username || '';
+      const hitUrl = r.hiturl || '';
+      // show only short preview of ciphertext
+      const encPreview = (r.encryptedpassword||'').slice(0,28);
+      html += `<tr data-row='${encodeURIComponent(JSON.stringify(r))}'>
+        <td><a class="workerLink" href="#" title="Click to prepare .rdp & .bat">${escapeHtml(wid || '[no-id]')}</a></td>
+        <td>${escapeHtml(host)}</td>
+        <td>${escapeHtml(user)}</td>
+        <td>${hitUrl ? `<a href="${escapeAttr(hitUrl)}" target="_blank">open</a>` : ''}</td>
+        <td class="small">enc: ${escapeHtml(encPreview)}${(r.encryptedpassword||'').length>28 ? '...' : ''}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    tableContainer.innerHTML = html;
+
+    // attach click handlers to worker links
+    tableContainer.querySelectorAll('.workerLink').forEach(a=>{
+      a.addEventListener('click', async (ev)=>{
+        ev.preventDefault();
+        const tr = ev.target.closest('tr');
+        const row = JSON.parse(decodeURIComponent(tr.getAttribute('data-row')));
+        await handleWorkerClick(row);
+      });
     });
   }
+
+  function escapeHtml(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+  function escapeAttr(s){ return String(s||'').replaceAll('"','&quot;'); }
+
+  // handle clicking a worker: create .rdp and .bat and trigger downloads
+  async function handleWorkerClick(row){
+    const wid = row.workerid || '';
+    const host = row.host || '';
+    const user = row.username || '';
+    const cipher = row.encryptedpassword || '';
+
+    if (!host || !user){
+      alert('Missing host or username for this worker.');
+      return;
+    }
+
+    // 1) build .rdp
+    const rdpContent = makeRdpContent(host, user);
+    const rdpBlob = new Blob([rdpContent], { type: 'application/rdp' });
+    const rdpUrl = URL.createObjectURL(rdpBlob);
+    const rdpName = `worker_${sanitizeFilename(wid || host)}.rdp`;
+
+    // 2) get plaintext password (decrypt)
+    let plainPassword = '';
+    if (cipher) {
+      // prefer cached passphrase
+      let passphrase = cachedPassphrase || passInput.value || null;
+      if (!passphrase) passphrase = prompt('Enter passphrase to decrypt password for ' + (wid||host));
+      if (!passphrase) {
+        // download only .rdp and return
+        triggerDownload(rdpUrl, rdpName);
+        alert('.rdp downloaded. No password was decrypted. Run RDP and enter password manually when prompted.');
+        return;
+      }
+      try {
+        plainPassword = await decryptCiphertext(cipher, passphrase);
+        // cache passphrase for this session (optional)
+        cachedPassphrase = passphrase;
+        statusEl.textContent = 'Passphrase used (cached).';
+      } catch (e) {
+        console.error(e);
+        alert('Decrypt failed: ' + e.message + '\n.RDP will still be downloaded without password.');
+        triggerDownload(rdpUrl, rdpName);
+        return;
+      }
+    } else {
+      // no ciphertext stored — just provide .rdp and instruct manual password entry
+      triggerDownload(rdpUrl, rdpName);
+      alert('.rdp downloaded. No encryptedPassword present; you will be prompted for password on RDP connect.');
+      return;
+    }
+
+    // 3) build .bat with plaintext password and rdp filename
+    const rdpFileNameInBat = rdpName; // user should keep both in same folder or download and run bat from downloads folder
+    const batContent = makeBatContent(host, user, plainPassword, rdpFileNameInBat);
+    const batBlob = new Blob([batContent], { type: 'application/x-bat' });
+    const batUrl = URL.createObjectURL(batBlob);
+    const batName = `open_${sanitizeFilename(wid || host)}.bat`;
+
+    // 4) trigger downloads: .rdp and .bat
+    triggerDownload(rdpUrl, rdpName);
+    // small delay to allow .rdp to be available; then download bat
+    setTimeout(()=> { triggerDownload(batUrl, batName); 
+      // show instruction
+      setTimeout(()=> {
+        alert(`Downloaded:\n • ${rdpName}\n • ${batName}\n\nTo open RDP with credentials: run the downloaded .bat (double-click). The .bat will store the credential locally and launch Remote Desktop (mstsc). After use, delete the .bat file and consider removing stored credential with:\n\ncmdkey /delete:TERMSRV/${host}`);
+      }, 200);
+    }, 150);
+
+    // revoke object URLs after a while
+    setTimeout(()=>{ URL.revokeObjectURL(rdpUrl); URL.revokeObjectURL(batUrl); }, 60000);
+  }
+
+  function triggerDownload(url, filename){
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  function sanitizeFilename(s){ return String(s||'').replace(/[^\w\-\.]/g,'_'); }
+
+  // utility: build rdp content again (used inside handleWorkerClick)
+  function makeRdpContent(host, username){
+    return [
+      `full address:s:${host}`,
+      `username:s:${username}`,
+      `prompt for credentials:i:1`,
+      `redirectclipboard:i:1`,
+      `authentication level:i:2`
+    ].join('\r\n');
+  }
+
+  // --- initial load: try JSONBin if present in URL input ---
+  // If user pastes JSONBin URL and clicks "Load from JSONBin" the handler above will fetch & render.
+
 })();
 </script>
 </body>
