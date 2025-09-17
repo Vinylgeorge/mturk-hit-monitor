@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name        MTurk Queue → JSONBin (Save Only, /tasks)
+// @name        MTurk Queue → JSONBin (One Row per Worker)
 // @namespace   Violentmonkey Scripts
 // @match       https://worker.mturk.com/tasks
 // @grant       GM_xmlhttpRequest
@@ -8,11 +8,13 @@
 (function() {
   'use strict';
 
-  const binId = "68c89a4fd0ea881f407f25c0";   // ✅ your Bin ID
-  const apiKey = "$2a$10$tGWSdPOsZbt7ecxcUqPwaOPrtBrw84TrZQDZtPvWN5Hpm595sHtUm"; // ✅ your API key
-  const putUrl = `https://api.jsonbin.io/v3/b/${binId}`;
+  // 🔧 CONFIG
+  const BIN_ID = "68c89a4fd0ea881f407f25c0";   // your Bin ID
+  const API_KEY = "$2a$10$tGWSdPOsZbt7ecxcUqPwaOPrtBrw84TrZQDZtPvWN5Hpm595sHtUm"; // your API key
+  const BIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
+  const REFRESH_INTERVAL_MS = 10000;
 
-  // Decode HTML entities (fix &amp; → &)
+  // Decode HTML entities
   function decodeEntities(str) {
     const txt = document.createElement("textarea");
     txt.innerHTML = str;
@@ -23,10 +25,10 @@
   function saveQueueToJsonBin(queue) {
     GM_xmlhttpRequest({
       method: "PUT",
-      url: putUrl,
+      url: BIN_URL,
       headers: {
         "Content-Type": "application/json",
-        "X-Master-Key": apiKey
+        "X-Master-Key": API_KEY
       },
       data: JSON.stringify({ record: queue }),
       onload: r => console.log("[MTurk→JSONBin] ✅ Queue saved:", queue),
@@ -56,13 +58,14 @@
 
       console.log("[MTurk→JSONBin] Scraped queue", queue);
       saveQueueToJsonBin(queue);
+
     } catch (err) {
       console.error("[MTurk→JSONBin] ❌ Failed to scrape:", err);
     }
   }
 
   // Run every 10s
-  setInterval(scrapeQueue, 10000);
+  setInterval(scrapeQueue, REFRESH_INTERVAL_MS);
   scrapeQueue();
 
 })();
