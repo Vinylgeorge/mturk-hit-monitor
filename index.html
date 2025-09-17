@@ -2,249 +2,61 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>MTurk Queue — JSONBin + Google Sheet Credentials</title>
+  <title>MTurk Queue Viewer</title>
   <style>
-    :root{ --bg:#f7f8fa; --card:#ffffff; --muted:#6b7280; --accent:#0f62fe; --border:#e6e9ef; }
-    *{ box-sizing:border-box; }
-    body{ font-family: Inter, Roboto, Arial, sans-serif; background: var(--bg); margin: 0; padding: 24px; color: #111827; }
-    .wrap{ max-width:1100px; margin:0 auto; }
-    header{ display:flex; gap:16px; align-items:center; margin-bottom:18px; flex-wrap:wrap; }
-    h1{ margin:0; font-size:20px; }
-    .controls{ margin-left:auto; display:flex; gap:10px; align-items:center; color:var(--muted); flex-wrap:wrap; }
-    button{ background:var(--accent); color:#fff; border:0; padding:8px 10px; border-radius:8px; cursor:pointer; font-weight:600; }
-    button.secondary{ background:#fff; color:var(--accent); border:1px solid var(--accent); }
-    .card{ background:var(--card); border-radius:10px; padding:12px; box-shadow: 0 1px 0 rgba(15,20,30,0.03); border:1px solid var(--border); }
-    table{ width:100%; border-collapse:collapse; font-size:14px; }
-    thead th{ text-align:left; font-size:13px; color:var(--muted); padding:10px 8px; border-bottom:1px solid var(--border); position:sticky; top:0; background:#fff; }
-    tbody td{ padding:10px 8px; border-bottom:1px solid #f1f3f5; vertical-align:middle; }
-    tbody tr:hover{ background:#fbfdff; }
-    a.hit-link{ color:var(--accent); text-decoration:none; font-weight:600; }
-    .small{ font-size:13px; color:var(--muted); }
-    .empty{ padding:40px; text-align:center; color:var(--muted); }
-    .cred-status{ padding:8px 12px; font-size:13px; color:var(--muted); }
-    input.text{ padding:6px; border-radius:6px; border:1px solid var(--border); min-width:340px; }
-    .footer{ margin-top:10px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    body { font-family: Arial, sans-serif; background: #f7f8fa; margin: 0; padding: 20px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    thead th { background: #fff; position: sticky; top: 0; border-bottom: 1px solid #ccc; padding: 8px; text-align: left; }
+    tbody td { padding: 8px; border-bottom: 1px solid #eee; }
+    tbody tr:hover { background: #f9fbff; }
+    .small { font-size: 12px; color: #555; }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <header>
-      <h1>MTurk Queue</h1>
-      <div class="controls">
-        <label><input id="autoRefresh" type="checkbox" /> <span class="small">Auto-refresh (10s)</span></label>
-        <button id="refreshBtn">Refresh</button>
-        <button id="exportBtn" class="secondary" title="Export table to CSV">Export CSV</button>
-      </div>
-      <div style="display:flex; gap:10px; align-items:center;">
-        <input id="sheetUrl" class="text" type="text"
-          placeholder="Paste Google Sheet CSV export URL"
-          value="https://docs.google.com/spreadsheets/d/1-7xUPOliQWs6VNUhF9mW6LMPSer2MI5VWTDLum6E95U/export?format=csv&gid=0" />
-        <button id="loadSheetBtn" class="secondary">Load credentials</button>
-      </div>
-    </header>
-
-    <div class="card">
-      <div id="tableContainer"><div class="empty">Loading queue…</div></div>
-      <div id="credNotice" class="cred-status" style="display:none;"></div>
-    </div>
-
-    <div class="footer small">
-      <div><strong>Source:</strong> <span id="binInfo"></span></div>
-      <div>•</div>
-      <div id="lastUpdated">Last updated: —</div>
-    </div>
-  </div>
+  <h1>MTurk Queue (from JSONBin)</h1>
+  <div id="tableContainer">Loading…</div>
 
   <script>
-    /* ====== CONFIG ====== */
-    const BIN_ID  = "68cb027aae596e708ff224df"; // your JSONBin bin
-    const API_KEY = "$2a$10$5Xu0r2zBDI4WoeenpLIlV.7L5UO/QpjY4mgnUPNreMOt6AydK.gZG"; // or "" for public-read
+    const BIN_ID = "68c89a4fd0ea881f407f25c0";
+    const API_KEY = "$2a$10$tGWSdPOsZbt7ecxcUqPwaOPrtBrw84TrZQDZtPvWN5Hpm595sHtUm";
     const BIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
-    const REFRESH_INTERVAL_MS = 10000;
-    /* ==================== */
 
-    const tableContainer = document.getElementById("tableContainer");
-    const refreshBtn = document.getElementById("refreshBtn");
-    const autoRefreshCheckbox = document.getElementById("autoRefresh");
-    const sheetUrlInput = document.getElementById("sheetUrl");
-    const loadSheetBtn = document.getElementById("loadSheetBtn");
-    const credNotice = document.getElementById("credNotice");
-    const binInfo = document.getElementById("binInfo");
-    const lastUpdated = document.getElementById("lastUpdated");
-    const exportBtn = document.getElementById("exportBtn");
-    binInfo.textContent = `jsonbin.io — bin: ${BIN_ID}`;
-
-    let credsMap = {};             // { workerid_lower: {host,username,password} }
-    let sheetCsvUrl = sheetUrlInput.value.trim();
-    let objectUrls = [];           // to revoke Blob URLs later
-    let autoTimer = null;
-    let currentHits = [];          // store latest for export
-
-    function safeText(str){ return str == null ? "" : String(str).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;"); }
-    function fmtTimeRemaining(sec){ if (sec == null || isNaN(sec)) return "-"; const m=Math.floor(sec/60),s=sec%60; return `${m}m ${s}s`; }
+    function fmtReward(v){ return v == null ? "-" : `$${Number(v).toFixed(2)}`; }
+    function fmtTimeRemaining(sec){ if (!sec) return "-"; const m=Math.floor(sec/60),s=sec%60; return `${m}m ${s}s`; }
     function fmtAcceptedAt(iso){ if(!iso) return "-"; try{ return new Date(iso).toLocaleString(); }catch(e){return iso;} }
-    function storeObjectUrl(url){ objectUrls.push(url); if(objectUrls.length>50){ URL.revokeObjectURL(objectUrls.shift()); } }
-
-    function makeRdpDownloadUrl({ host, username, password }) {
-      // NOTE: embedding a password in an RDP file is insecure; include only if you understand the risk.
-      let payload = `full address:s:${host}\nusername:s:${username}\n`;
-      if (password) payload += `;password (insecure): ${password}\n`;
-      const blob = new Blob([payload], { type: "application/rdp" });
-      const url = URL.createObjectURL(blob); storeObjectUrl(url); return url;
-    }
-
-    function buildTable(hits){
-      currentHits = Array.isArray(hits) ? hits : [];
-      if (currentHits.length === 0) {
-        tableContainer.innerHTML = `<div class="empty">No hits in queue.</div>`;
-        return;
-      }
-
-      const html = [];
-      html.push(`<table><thead><tr>
-        <th>Requester</th><th>Title</th><th>Reward</th><th>Worker ID</th><th>Time Remaining</th><th>Accepted At</th>
-      </tr></thead><tbody>`);
-
-      for (const hit of currentHits){
-        const requester = safeText(hit.requester || "Unknown");
-        const title = safeText(hit.title || "Untitled");
-        const reward = hit.reward == null ? "-" : `$${Number(hit.reward).toFixed(2)}`;
-        const timeRemaining = fmtTimeRemaining(Number(hit.timeRemainingSeconds));
-        const acceptedAt = fmtAcceptedAt(hit.acceptedAt);
-        const url = safeText(hit.url || "#");
-
-        const widRaw = String(hit.workerId || "").trim();
-        const widKey = widRaw.toLowerCase();
-        const cred = credsMap[widKey] || null;
-        const host = cred?.host || "34.220.34.216";
-        const username = cred?.username || "administrator";
-        const password = cred?.password || "";
-        const rdpUrl = makeRdpDownloadUrl({ host, username, password });
-
-        html.push(`<tr>
-          <td>${requester}</td>
-          <td><a class="hit-link" href="${url}" target="_blank" rel="noopener">${title}</a></td>
-          <td>${reward}</td>
-          <td><a href="${rdpUrl}" download="${safeText(widRaw)}.rdp">${safeText(widRaw)}</a></td>
-          <td class="small">${timeRemaining}</td>
-          <td class="small">${acceptedAt}</td>
-        </tr>`);
-      }
-
-      html.push(`</tbody></table>`);
-      tableContainer.innerHTML = html.join("");
-      lastUpdated.textContent = "Last updated: " + new Date().toLocaleString();
-    }
 
     async function fetchBin(){
       const headers = API_KEY ? { "X-Master-Key": API_KEY } : {};
-      try {
-        const res = await fetch(BIN_URL, { headers, cache:"no-store" });
-        if (!res.ok) throw new Error(`Fetch failed ${res.status}`);
-        const js = await res.json();
-        // JSONBin v3 returns { record: [...] } — but some setups can nest it.
-        let hits = js?.record ?? js;
-        while (hits && typeof hits==="object" && !Array.isArray(hits) && hits.record) {
-          hits = hits.record;
-        }
-        if (!Array.isArray(hits)) throw new Error("Unexpected data format from JSONBin");
-        buildTable(hits);
-      } catch (err) {
-        tableContainer.innerHTML = `<div class="empty">Error: ${safeText(err.message)}</div>`;
-      }
-    }
+      const res = await fetch(BIN_URL, { headers, cache:"no-store" });
+      const js = await res.json();
+      let hits = js?.record ?? [];
+      if (!Array.isArray(hits)) hits = hits.record ?? [];
 
-    async function loadCredentialsFromSheet(url){
-      if (!url) return;
-      try {
-        credNotice.style.display="block"; credNotice.textContent="Loading credentials...";
-        const res = await fetch(url, { cache:"no-store" });
-        if (!res.ok) throw new Error(`Failed ${res.status}`);
-        const txt = await res.text();
-
-        // Basic CSV parse (no quoted field support). Expect header: workerId,host,username,password
-        const rows = txt.trim().split(/\r?\n/).filter(r=>r);
-        const hdr = rows[0].split(",").map(h=>h.trim().toLowerCase());
-        const idx = {
-          workerid: hdr.indexOf("workerid"),
-          host: hdr.indexOf("host"),
-          username: hdr.indexOf("username"),
-          password: hdr.indexOf("password")
-        };
-        if (idx.workerid === -1) throw new Error("Missing 'workerId' header in CSV");
-
-        credsMap = {};
-        for (let i=1;i<rows.length;i++){
-          const cols = rows[i].split(",").map(c=>c.trim());
-          const wid = (cols[idx.workerid] || "").trim().toLowerCase();
-          if (!wid) continue;
-          credsMap[wid] = {
-            host: idx.host     >=0 ? (cols[idx.host]||"") : "",
-            username: idx.username>=0 ? (cols[idx.username]||"") : "",
-            password: idx.password>=0 ? (cols[idx.password]||"") : ""
-          };
-        }
-        const count = Object.keys(credsMap).length;
-        credNotice.textContent = `Loaded credentials for ${count} worker(s).`;
-      } catch(e){
-        credNotice.textContent = "Error: " + e.message;
-      }
-    }
-
-    function startAutoRefresh(enabled){
-      if (autoTimer){ clearInterval(autoTimer); autoTimer = null; }
-      if (enabled){
-        autoTimer = setInterval(() => {
-          fetchBin();
-          if (sheetCsvUrl) loadCredentialsFromSheet(sheetCsvUrl);
-        }, REFRESH_INTERVAL_MS);
-      }
-    }
-
-    function exportToCsv(){
-      if (!currentHits.length){
-        alert("No data to export.");
+      if (!Array.isArray(hits) || hits.length === 0) {
+        document.getElementById("tableContainer").innerHTML = `<p>No data.</p>`;
         return;
       }
-      const rows = [
-        ["requester","title","reward","workerId","timeRemainingSeconds","acceptedAt","deadline","assignmentId","hitId","url"]
-      ];
-      for (const h of currentHits){
-        rows.push([
-          h.requester || "",
-          h.title || "",
-          (h.reward ?? ""),
-          h.workerId || "",
-          (h.timeRemainingSeconds ?? ""),
-         // h.acceptedAt || "",
-        //  h.deadline || "",
-        //  h.assignmentId || "",
-          h.hitId || "",
-         // h.url || ""
-        ]);
-      }
-      const csv = rows.map(r => r.map(v => {
-        const s = String(v ?? "");
-        return (/[",\n]/.test(s)) ? `"${s.replace(/"/g,'""')}"` : s;
-      }).join(",")).join("\n");
 
-      const blob = new Blob([csv], { type: "text/csv" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = "mturk-queue.csv";
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(()=>URL.revokeObjectURL(url), 1000);
+      let html = `<table><thead>
+        <tr><th>Requester</th><th>Title</th><th>Reward</th><th>Worker ID</th><th>Time Remaining</th><th>Accepted At</th></tr>
+      </thead><tbody>`;
+
+      for (const hit of hits) {
+        html += `<tr>
+          <td>${hit.requester}</td>
+          <td>${hit.title}</td>
+          <td>${fmtReward(hit.reward)}</td>
+          <td>${hit.workerId}</td>
+          <td class="small">${fmtTimeRemaining(hit.timeRemainingSeconds)}</td>
+          <td class="small">${fmtAcceptedAt(hit.acceptedAt)}</td>
+        </tr>`;
+      }
+
+      html += `</tbody></table>`;
+      document.getElementById("tableContainer").innerHTML = html;
     }
 
-    // UI bindings
-    refreshBtn.addEventListener("click", ()=>{ fetchBin(); if (sheetCsvUrl) loadCredentialsFromSheet(sheetCsvUrl); });
-    loadSheetBtn.addEventListener("click", ()=>{ sheetCsvUrl = sheetUrlInput.value.trim(); loadCredentialsFromSheet(sheetCsvUrl); });
-    autoRefreshCheckbox.addEventListener("change", e => startAutoRefresh(e.target.checked));
-    exportBtn.addEventListener("click", exportToCsv);
-
-    // initial load
-    loadCredentialsFromSheet(sheetCsvUrl);
+    setInterval(fetchBin, 10000);
     fetchBin();
   </script>
 </body>
