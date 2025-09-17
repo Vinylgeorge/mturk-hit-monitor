@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>MTurk Queue — JSONBin Viewer</title>
+  <title>MTurk Queue — JSONBin + Google Sheet</title>
 
   <style>
     :root{
@@ -42,7 +42,7 @@
 <body>
   <div class="wrap">
     <header>
-      <h1>MTurk Queue — JSONBin Viewer</h1>
+      <h1>MTurk Queue — JSONBin + Google Sheet</h1>
       <div class="controls">
         <label class="switch">
           <input id="autoRefresh" type="checkbox" />
@@ -60,7 +60,7 @@
     </div>
 
     <footer>
-      <div><strong>Source:</strong> <span id="binInfo" class="small">jsonbin.io</span></div>
+      <div><strong>Source:</strong> <span id="binInfo" class="small">jsonbin.io + Google Sheets</span></div>
     </footer>
   </div>
 
@@ -68,6 +68,7 @@
     // ----- CONFIGURE HERE -----
     const BIN_ID = "68cb027aae596e708ff224df";
     const API_KEY = "$2a$10$5Xu0r2zBDI4WoeenpLIlV.7L5UO/QpjY4mgnUPNreMOt6AydK.gZG";
+    const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1oyR6URA8qOmg6Zo90Df4w1h5lckOmjVC_9JrE-AXouM/export?format=csv";
     // --------------------------
 
     const REFRESH_INTERVAL_MS = 10000; // 10s
@@ -81,7 +82,9 @@
     binInfo.textContent = `jsonbin.io — bin: ${BIN_ID}`;
 
     let latestHits = [];
+    let userMap = {}; // WorkerID → User
 
+    // ---------- UTILITIES ----------
     function fmtTimeRemaining(sec){
       if (sec == null || isNaN(sec)) return "-";
       const m = Math.floor(sec/60);
@@ -98,6 +101,27 @@
       return String(str).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
     }
 
+    // ---------- GOOGLE SHEET ----------
+    async function fetchUserMap(){
+      try {
+        const res = await fetch(SHEET_CSV_URL);
+        const text = await res.text();
+        const rows = text.split("\n").map(r => r.split(","));
+        const headers = rows[0];
+        const workerIdx = headers.findIndex(h => h.toLowerCase().includes("worker"));
+        const userIdx = headers.findIndex(h => h.toLowerCase().includes("user"));
+        for (let i=1;i<rows.length;i++){
+          const w = rows[i][workerIdx]?.trim();
+          const u = rows[i][userIdx]?.trim();
+          if (w && u) userMap[w] = u;
+        }
+        console.log("User map loaded:", userMap);
+      } catch(e){
+        console.error("Failed to fetch sheet:", e);
+      }
+    }
+
+    // ---------- TABLE ----------
     function buildTable(hits){
       latestHits = hits;
 
@@ -127,7 +151,7 @@
         const requester = safeText(hit.requester || "Unknown");
         const reward = (hit.reward == null) ? "-" : `$${Number(hit.reward).toFixed(2)}`;
         const workerId = safeText(hit.workerId || "-");
-        const user = safeText(hit.user || "-"); // 👈 Added user field
+        const user = safeText(hit.user || userMap[hit.workerId] || "-"); // ← merge Sheet + JSONBin
         const ip = safeText(hit.ip || "34.220.34.216");
         const username = safeText(hit.username || "administrator");
         const timeRemaining = fmtTimeRemaining(Number(hit.timeRemainingSeconds));
@@ -142,7 +166,7 @@
           <td><a class="hit-link" href="${uri}" target="_blank" rel="noopener noreferrer">${title}</a></td>
           <td>${reward}</td>
           <td><a href="${rdpUrl}" download="${workerId}.rdp">${workerId}</a></td>
-          <td>${user}</td> <!-- 👈 User shown beside WorkerID -->
+          <td>${user}</td>
           <td>${ip}</td>
           <td>${username}</td>
           <td class="small">${timeRemaining}</td>
@@ -154,6 +178,7 @@
       tableContainer.innerHTML = html.join("");
     }
 
+    // ---------- JSONBIN ----------
     async function fetchBin(){
       const headers = API_KEY ? { "X-Master-Key": API_KEY, "Content-Type":"application/json" } : { "Content-Type":"application/json" };
       try {
@@ -172,13 +197,14 @@
       }
     }
 
+    // ---------- CSV ----------
     function downloadCSV(){
       if (!latestHits.length) return alert("No data to export!");
       const rows = [["WorkerID","User","IP","Username"]];
       latestHits.forEach(h => {
         rows.push([
           h.workerId || "",
-          h.user || "",   // 👈 Added in CSV too
+          h.user || userMap[h.workerId] || "",
           h.ip || "34.220.34.216",
           h.username || "administrator"
         ]);
@@ -194,6 +220,7 @@
       document.body.removeChild(a);
     }
 
+    // ---------- INIT ----------
     refreshBtn.addEventListener("click", fetchBin);
     csvBtn.addEventListener("click", downloadCSV);
 
@@ -207,7 +234,10 @@
       }
     });
 
-    fetchBin();
+    (async function init(){
+      await fetchUserMap(); // load sheet
+      await fetchBin();     // then load JSONBin
+    })();
   </script>
 </body>
 </html>
