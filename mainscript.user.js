@@ -14,10 +14,6 @@
 })();
 
 
-(function() {
-  https://github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/mon.user.js
-
-})();
 
 (function() {
   https://github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/refresh.user.js
