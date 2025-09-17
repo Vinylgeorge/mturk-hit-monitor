@@ -2,61 +2,211 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>MTurk Queue Viewer</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>MTurk Queue — JSONBin Viewer</title>
+
   <style>
-    body { font-family: Arial, sans-serif; background: #f7f8fa; margin: 0; padding: 20px; }
-    table { width: 100%; border-collapse: collapse; font-size: 14px; }
-    thead th { background: #fff; position: sticky; top: 0; border-bottom: 1px solid #ccc; padding: 8px; text-align: left; }
-    tbody td { padding: 8px; border-bottom: 1px solid #eee; }
-    tbody tr:hover { background: #f9fbff; }
-    .small { font-size: 12px; color: #555; }
+    :root{
+      --bg:#f7f8fa;
+      --card:#ffffff;
+      --muted:#6b7280;
+      --accent:#0f62fe;
+      --border:#e6e9ef;
+    }
+    body{
+      font-family: Inter, Roboto, Arial, sans-serif;
+      background: var(--bg);
+      margin: 0;
+      padding: 24px;
+      color: #111827;
+    }
+    .wrap{ max-width: 1200px; margin: 0 auto; }
+    header{ display:flex; gap:16px; align-items:center; margin-bottom:18px; }
+    h1{ margin:0; font-size:20px; }
+    .controls{ margin-left:auto; display:flex; gap:10px; align-items:center; color:var(--muted); }
+    button{
+      background:var(--accent); color:#fff; border:0;
+      padding:8px 10px; border-radius:8px; cursor:pointer; font-weight:600;
+    }
+    button.secondary{ background:#fff; color:var(--accent); border:1px solid var(--accent); padding:7px 10px; }
+    .card{ background:var(--card); border-radius:10px; padding:12px; box-shadow: 0 1px 0 rgba(15,20,30,0.03); border:1px solid var(--border); }
+    table{ width:100%; border-collapse:collapse; font-size:14px; }
+    thead th{ text-align:left; font-size:13px; color:var(--muted); padding:10px 8px; border-bottom:1px solid var(--border); position:sticky; top:0; background:#fff; }
+    tbody td{ padding:10px 8px; border-bottom:1px solid #f1f3f5; vertical-align:middle; }
+    tbody tr:hover{ background:#fbfdff; }
+    .small{ font-size:13px; color:var(--muted); }
+    .empty{ padding:40px; text-align:center; color:var(--muted); }
+    footer{ margin-top:12px; color:var(--muted); font-size:13px; }
   </style>
 </head>
 <body>
-  <h1>MTurk Queue (from JSONBin)</h1>
-  <div id="tableContainer">Loading…</div>
+  <div class="wrap">
+    <header>
+      <h1>MTurk Queue — JSONBin Viewer</h1>
+      <div class="controls">
+        <label class="switch">
+          <input id="autoRefresh" type="checkbox" />
+          <span class="small">Auto-refresh (10s)</span>
+        </label>
+        <button id="refreshBtn">Refresh</button>
+        <button id="csvBtn" class="secondary">Download CSV</button>
+      </div>
+    </header>
+
+    <div class="card">
+      <div id="tableContainer">
+        <div class="empty">Loading queue from JSONBin…</div>
+      </div>
+    </div>
+
+    <footer>
+      <div><strong>Source:</strong> <span id="binInfo" class="small">jsonbin.io</span></div>
+    </footer>
+  </div>
 
   <script>
+    // ----- CONFIGURE HERE -----
     const BIN_ID = "68cb027aae596e708ff224df";
     const API_KEY = "$2a$10$5Xu0r2zBDI4WoeenpLIlV.7L5UO/QpjY4mgnUPNreMOt6AydK.gZG";
+    // --------------------------
+
+    const REFRESH_INTERVAL_MS = 10000; // 10s
+    const tableContainer = document.getElementById("tableContainer");
+    const refreshBtn = document.getElementById("refreshBtn");
+    const autoRefreshCheckbox = document.getElementById("autoRefresh");
+    const csvBtn = document.getElementById("csvBtn");
+    const binInfo = document.getElementById("binInfo");
+
     const BIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
+    binInfo.textContent = `jsonbin.io — bin: ${BIN_ID}`;
 
-    function fmtReward(v){ return v == null ? "-" : `$${Number(v).toFixed(2)}`; }
-    function fmtTimeRemaining(sec){ if (!sec) return "-"; const m=Math.floor(sec/60),s=sec%60; return `${m}m ${s}s`; }
-    function fmtAcceptedAt(iso){ if(!iso) return "-"; try{ return new Date(iso).toLocaleString(); }catch(e){return iso;} }
+    let latestHits = [];
 
-    async function fetchBin(){
-      const headers = API_KEY ? { "X-Master-Key": API_KEY } : {};
-      const res = await fetch(BIN_URL, { headers, cache:"no-store" });
-      const js = await res.json();
-      let hits = js?.record ?? [];
-      if (!Array.isArray(hits)) hits = hits.record ?? [];
+    function fmtTimeRemaining(sec){
+      if (sec == null || isNaN(sec)) return "-";
+      const m = Math.floor(sec/60);
+      const s = sec % 60;
+      return `${m}m ${s}s`;
+    }
+    function fmtAcceptedAt(iso){
+      if(!iso) return "-";
+      try { return new Date(iso).toLocaleString(); }
+      catch(e){ return iso; }
+    }
+    function safeText(str){
+      if (str == null) return "";
+      return String(str).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
+    }
+
+    function buildTable(hits){
+      latestHits = hits;
 
       if (!Array.isArray(hits) || hits.length === 0) {
-        document.getElementById("tableContainer").innerHTML = `<p>No data.</p>`;
+        tableContainer.innerHTML = `<div class="empty">No hits in queue.</div>`;
         return;
       }
 
-      let html = `<table><thead>
-        <tr><th>Requester</th><th>Title</th><th>Reward</th><th>Worker ID</th><th>Time Remaining</th><th>Accepted At</th></tr>
-      </thead><tbody>`;
+      const html = [];
+      html.push(`<table aria-label="MTurk queue">`);
+      html.push(`<thead><tr>
+        <th>Requester</th>
+        <th>Title</th>
+        <th>Reward</th>
+        <th>Worker ID</th>
+        <th>User</th>
+        <th>IP</th>
+        <th>Username</th>
+        <th>Time Remaining</th>
+        <th>Accepted At</th>
+      </tr></thead>`);
+      html.push(`<tbody>`);
 
-      for (const hit of hits) {
-        html += `<tr>
-          <td>${hit.requester}</td>
-          <td>${hit.title}</td>
-          <td>${fmtReward(hit.reward)}</td>
-          <td>${hit.workerId}</td>
-          <td class="small">${fmtTimeRemaining(hit.timeRemainingSeconds)}</td>
-          <td class="small">${fmtAcceptedAt(hit.acceptedAt)}</td>
-        </tr>`;
+      for (const hit of hits){
+        const uri = hit.url ? String(hit.url) : "#";
+        const title = safeText(hit.title || hit.requester || "Untitled");
+        const requester = safeText(hit.requester || "Unknown");
+        const reward = (hit.reward == null) ? "-" : `$${Number(hit.reward).toFixed(2)}`;
+        const workerId = safeText(hit.workerId || "-");
+        const user = safeText(hit.user || "-"); // 👈 Added user field
+        const ip = safeText(hit.ip || "34.220.34.216");
+        const username = safeText(hit.username || "administrator");
+        const timeRemaining = fmtTimeRemaining(Number(hit.timeRemainingSeconds));
+        const acceptedAt = fmtAcceptedAt(hit.acceptedAt);
+
+        const rdpContent = `full address:s:${ip}\nusername:s:${username}\n`;
+        const blob = new Blob([rdpContent], { type: "application/rdp" });
+        const rdpUrl = URL.createObjectURL(blob);
+
+        html.push(`<tr>
+          <td>${requester}</td>
+          <td><a class="hit-link" href="${uri}" target="_blank" rel="noopener noreferrer">${title}</a></td>
+          <td>${reward}</td>
+          <td><a href="${rdpUrl}" download="${workerId}.rdp">${workerId}</a></td>
+          <td>${user}</td> <!-- 👈 User shown beside WorkerID -->
+          <td>${ip}</td>
+          <td>${username}</td>
+          <td class="small">${timeRemaining}</td>
+          <td class="small">${acceptedAt}</td>
+        </tr>`);
       }
 
-      html += `</tbody></table>`;
-      document.getElementById("tableContainer").innerHTML = html;
+      html.push(`</tbody></table>`);
+      tableContainer.innerHTML = html.join("");
     }
 
-    setInterval(fetchBin, 10000);
+    async function fetchBin(){
+      const headers = API_KEY ? { "X-Master-Key": API_KEY, "Content-Type":"application/json" } : { "Content-Type":"application/json" };
+      try {
+        const res = await fetch(BIN_URL, { headers, cache: "no-store" });
+        if (!res.ok) throw new Error(`Fetch failed (${res.status})`);
+        const json = await res.json();
+        let hits = json?.record ?? json;
+        while (hits && typeof hits === "object" && !Array.isArray(hits) && hits.record && Array.isArray(hits.record)) {
+          hits = hits.record;
+        }
+        if (!Array.isArray(hits)) throw new Error("Unexpected data format from JSONBin — expected an array at 'record'");
+        buildTable(hits);
+      } catch (err) {
+        console.error("Failed to load JSONBin:", err);
+        tableContainer.innerHTML = `<div class="empty">Failed to load JSONBin: ${safeText(err.message)}</div>`;
+      }
+    }
+
+    function downloadCSV(){
+      if (!latestHits.length) return alert("No data to export!");
+      const rows = [["WorkerID","User","IP","Username"]];
+      latestHits.forEach(h => {
+        rows.push([
+          h.workerId || "",
+          h.user || "",   // 👈 Added in CSV too
+          h.ip || "34.220.34.216",
+          h.username || "administrator"
+        ]);
+      });
+      const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+      const blob = new Blob([csv], { type:"text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "mturk_queue.csv";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+
+    refreshBtn.addEventListener("click", fetchBin);
+    csvBtn.addEventListener("click", downloadCSV);
+
+    let intervalId = null;
+    autoRefreshCheckbox.addEventListener("change", (e) => {
+      if (e.target.checked) {
+        intervalId = setInterval(fetchBin, REFRESH_INTERVAL_MS);
+      } else {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    });
+
     fetchBin();
   </script>
 </body>
