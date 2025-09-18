@@ -1,17 +1,15 @@
 // ==UserScript==
-// @name        MTurk Queue 
-// @version      1.9
+// @name        MTurk Queue → JSONBin (New Work Only, Prune Finished)
 // @namespace   Violentmonkey Scripts
 // @match       https://worker.mturk.com/tasks
 // @grant       GM_xmlhttpRequest
-// @updateURL    https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/mon.user.js
-// @downloadURL  https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/mon.user.js
-
+// @version     1.9
+// @description Save MTurk queue to JSONBin only when new work arrives, prune finished ones
 // ==/UserScript==
 
-(function() {
+(function () {
   'use strict';
- function schedulePageReload() {
+function schedulePageReload() {
     // random between 40 and 130 seconds
     const min = 10, max = 20;
     const delay = Math.floor(Math.random() * (max - min + 1) + min) * 1000;
@@ -25,8 +23,7 @@
 
   // start the first timer
   schedulePageReload();
-  // 🔧 CONFIG
-const BIN_ID = "68cb027aae596e708ff224df";   // your JSONBin Bin ID
+  const BIN_ID = "68cb027aae596e708ff224df";   // your JSONBin Bin ID
   const API_KEY = "$2a$10$5Xu0r2zBDI4WoeenpLIlV.7L5UO/QpjY4mgnUPNreMOt6AydK.gZG";
   const BIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
   const CHECK_INTERVAL_MS = 10000;
