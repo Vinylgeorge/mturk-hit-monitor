@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name        MTurk Queue 
-// @version      1.5
+// @version      1.6
 // @namespace   Violentmonkey Scripts
 // @match       https://worker.mturk.com/tasks
 // @grant       GM_xmlhttpRequest
@@ -27,11 +27,14 @@
   schedulePageReload();
   // 🔧 CONFIG
 
-  const BIN_ID = "68cb027aae596e708ff224df";   // your JSONBin Bin ID
+ const BIN_ID = "68cb027aae596e708ff224df";   // your JSONBin Bin ID
   const API_KEY = "$2a$10$5Xu0r2zBDI4WoeenpLIlV.7L5UO/QpjY4mgnUPNreMOt6AydK.gZG";
   const BIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
+  const CHECK_INTERVAL_MS = 10000;
 
-  // --- Helpers ---
+  // local cache of known assignmentIds
+  let knownAssignments = new Set();
+
   function decodeEntities(str) {
     const txt = document.createElement("textarea");
     txt.innerHTML = str;
@@ -54,59 +57,28 @@
   }
 
   async function saveQueue(queue) {
-    try {
-      const existing = await fetchExistingBin();
-      const merged = [...existing];
-
-      for (const row of queue) {
-        // avoid duplicates by assignmentId (unique per HIT accept)
-        if (!merged.find(r => r.assignmentId === row.assignmentId)) {
-          merged.push(row);
-        }
-      }
-
-      GM_xmlhttpRequest({
-        method: "PUT",
-        url: BIN_URL,
-        headers: {
-          "Content-Type": "application/json",
-          "X-Master-Key": API_KEY
-        },
-        data: JSON.stringify({ record: merged }),
-        onload: r => console.log("[MTurk→JSONBin] ✅ Saved merged queue:", merged.length, "rows"),
-        onerror: e => console.error("[MTurk→JSONBin] ❌ Error:", e)
-      });
-    } catch (err) {
-      console.error("[MTurk→JSONBin] ❌ Save error:", err);
-    }
+    GM_xmlhttpRequest({
+      method: "PUT",
+      url: BIN_URL,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Master-Key": API_KEY
+      },
+      data: JSON.stringify({ record: queue }),
+      onload: r => console.log("[MTurk→JSONBin] ✅ Saved queue:", queue.length, "rows"),
+      onerror: e => console.error("[MTurk→JSONBin] ❌ Error:", e)
+    });
   }
 
-  function annotateDuplicates(queue) {
-    const groups = {};
-    for (const hit of queue) {
-      const key = `${hit.requester}|${hit.title}|${hit.reward}|${hit.url}`;
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(hit);
-    }
-    for (const key in groups) {
-      const group = groups[key];
-      if (group.length > 1) {
-        group[0].title = `${group[0].title} ([${group.length} times])`;
-      }
-    }
-    return Object.values(groups).flat();
-  }
-
-  // --- Scraper ---
   function scrapeQueue() {
     const el = document.querySelector("[data-react-class*='TaskQueueTable']");
-    if (!el) return;
+    if (!el) return [];
 
     try {
       const props = JSON.parse(decodeEntities(el.getAttribute("data-react-props")));
-      if (!props.bodyData || !Array.isArray(props.bodyData)) return;
+      if (!props.bodyData || !Array.isArray(props.bodyData)) return [];
 
-      const queue = props.bodyData.map(hit => ({
+      return props.bodyData.map(hit => ({
         assignmentId: hit.assignment_id,
         hitId: hit.task_id,
         workerId: hit.question.value.match(/workerId=([^&]+)/)?.[1] || "",
@@ -118,17 +90,40 @@
         deadline: hit.deadline,
         url: decodeEntities(hit.question.value)
       }));
-
-      const annotated = annotateDuplicates(queue);
-      console.log("[MTurk→JSONBin] Scraped queue:", annotated);
-      saveQueue(annotated);
-
     } catch (err) {
       console.error("[MTurk→JSONBin] ❌ Scrape failed:", err);
+      return [];
+    }
+  }
+
+  async function runOnce() {
+    const queue = scrapeQueue();
+    if (queue.length === 0) return;
+
+    // find new assignmentIds compared to what we already know
+    const newOnes = queue.filter(hit => !knownAssignments.has(hit.assignmentId));
+
+    if (newOnes.length > 0) {
+      console.log("[MTurk→JSONBin] ✨ New work detected:", newOnes.map(h=>h.assignmentId));
+      // update local cache
+      queue.forEach(hit => knownAssignments.add(hit.assignmentId));
+
+      // fetch current bin, merge, then save
+      const existing = await fetchExistingBin();
+      const merged = [...existing];
+      for (const row of newOnes) {
+        if (!merged.find(r => r.assignmentId === row.assignmentId)) {
+          merged.push(row);
+        }
+      }
+      saveQueue(merged);
+    } else {
+      console.log("[MTurk→JSONBin] No new work — skipping API call.");
     }
   }
 
   // run every 10s
-  setInterval(scrapeQueue, 10000);
-  scrapeQueue();
+  setInterval(runOnce, CHECK_INTERVAL_MS);
+  runOnce();
+
 })();
