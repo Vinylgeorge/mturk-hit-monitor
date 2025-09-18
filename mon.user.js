@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name        MTurk Queue 
-// @version      1.8
+// @version      1.9
 // @namespace   Violentmonkey Scripts
 // @match       https://worker.mturk.com/tasks
 // @grant       GM_xmlhttpRequest
@@ -107,5 +107,41 @@ const BIN_ID = "68cb027aae596e708ff224df";   // your JSONBin Bin ID
       console.error("[MTurk→JSONBin] ❌ Scrape failed:", err);
       return [];
     }
+  }
+
+  async function initKnownAssignments() {
+    if (initialized) return;
+    const existing = await fetchExistingBin();
+    for (const row of existing) {
+      knownAssignments.add(row.assignmentId);
+    }
+    initialized = true;
+    console.log("[MTurk→JSONBin] Known assignments initialized:", knownAssignments.size);
+  }
+
+  async function runOnce() {
+    await initKnownAssignments();
+
+    const queue = scrapeQueue();
+    if (queue.length === 0) {
+      console.log("[MTurk→JSONBin] Queue empty — no API call.");
+      return;
+    }
+
+    const currentIds = new Set(queue.map(h => h.assignmentId));
+    const newOnes = queue.filter(hit => !knownAssignments.has(hit.assignmentId));
+
+    if (newOnes.length > 0) {
+      console.log("[MTurk→JSONBin] ✨ New work detected:", newOnes.map(h => h.assignmentId));
+      await saveQueue(queue);
+      // update known set
+      for (const row of queue) knownAssignments.add(row.assignmentId);
+    } else {
+      console.log("[MTurk→JSONBin] No new work — skipping API call.");
+    }
+  }
+
+  setInterval(runOnce, CHECK_INTERVAL_MS);
+  runOnce();
 
 })();
