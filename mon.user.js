@@ -4,8 +4,8 @@
 // @namespace   Violentmonkey Scripts
 // @match       https://worker.mturk.com/tasks
 // @grant       GM_xmlhttpRequest
-// @updateURL    https://raw.github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/mon.user.js
-// @downloadURL  https://raw.github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/mon.user.js
+// @updateURL    https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/mon.user.js
+// @downloadURL  https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/mon.user.js
 
 // ==/UserScript==
 
