@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>MTurk Queue — JSONBin + Google Sheet</title>
+  <title>MTurk Monitor</title>
 
   <style>
     :root{
@@ -42,7 +42,7 @@
 <body>
   <div class="wrap">
     <header>
-      <h1>MTurk Queue — JSONBin + Google Sheet</h1>
+      <h1>MTurk Monitor</h1>
       <div class="controls">
         <label class="switch">
           <input id="autoRefresh" type="checkbox" />
@@ -55,7 +55,7 @@
 
     <div class="card">
       <div id="tableContainer">
-        <div class="empty">Loading queue from JSONBin…</div>
+        <div class="empty">Loading queue from worker ids..</div>
       </div>
     </div>
 
@@ -66,8 +66,8 @@
 
   <script>
     // ----- CONFIGURE HERE -----
-    const BIN_ID = "68cb027aae596e708ff224df";
-    const API_KEY = "$2a$10$5Xu0r2zBDI4WoeenpLIlV.7L5UO/QpjY4mgnUPNreMOt6AydK.gZG";
+    const BIN_ID = "68c89a4fd0ea881f407f25c0";
+    const API_KEY = "$2a$10$tGWSdPOsZbt7ecxcUqPwaOPrtBrw84TrZQDZtPvWN5Hpm595sHtUm";
     const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1oyR6URA8qOmg6Zo90Df4w1h5lckOmjVC_9JrE-AXouM/export?format=csv";
     // --------------------------
 
