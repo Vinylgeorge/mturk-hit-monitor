@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name        MTurk Queue 
-// @version      1.7
+// @version      1.8
 // @namespace   Violentmonkey Scripts
 // @match       https://worker.mturk.com/tasks
 // @grant       GM_xmlhttpRequest
@@ -26,13 +26,14 @@
   // start the first timer
   schedulePageReload();
   // 🔧 CONFIG
-
 const BIN_ID = "68cb027aae596e708ff224df";   // your JSONBin Bin ID
   const API_KEY = "$2a$10$5Xu0r2zBDI4WoeenpLIlV.7L5UO/QpjY4mgnUPNreMOt6AydK.gZG";
   const BIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
   const CHECK_INTERVAL_MS = 10000;
 
-  let lastAssignments = new Set();
+  // persistent memory of assignments already in JSONBin
+  let knownAssignments = new Set();
+  let initialized = false;
 
   function decodeEntities(str) {
     const txt = document.createElement("textarea");
@@ -58,11 +59,11 @@ const BIN_ID = "68cb027aae596e708ff224df";   // your JSONBin Bin ID
   async function saveQueue(newQueue) {
     const existing = await fetchExistingBin();
 
-    // Keep only still-active assignmentIds
+    // keep only active assignmentIds
     const activeIds = new Set(newQueue.map(h => h.assignmentId));
     const merged = existing.filter(r => activeIds.has(r.assignmentId));
 
-    // Add any new ones not in merged
+    // add new ones
     for (const row of newQueue) {
       if (!merged.find(r => r.assignmentId === row.assignmentId)) {
         merged.push(row);
@@ -106,32 +107,5 @@ const BIN_ID = "68cb027aae596e708ff224df";   // your JSONBin Bin ID
       console.error("[MTurk→JSONBin] ❌ Scrape failed:", err);
       return [];
     }
-  }
-
-  async function runOnce() {
-    const queue = scrapeQueue();
-    const currentAssignments = new Set(queue.map(h => h.assignmentId));
-
-    if (queue.length === 0) {
-      console.log("[MTurk→JSONBin] Queue empty — no API call.");
-      lastAssignments = currentAssignments;
-      return;
-    }
-
-    // Check if new work arrived
-    const newAssignments = [...currentAssignments].filter(a => !lastAssignments.has(a));
-
-    if (newAssignments.length > 0) {
-      console.log("[MTurk→JSONBin] ✨ New work detected:", newAssignments);
-      await saveQueue(queue);
-    } else {
-      console.log("[MTurk→JSONBin] No new work — skipping API call.");
-    }
-
-    lastAssignments = currentAssignments;
-  }
-
-  setInterval(runOnce, CHECK_INTERVAL_MS);
-  runOnce();
 
 })();
