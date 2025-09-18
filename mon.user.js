@@ -1,10 +1,12 @@
 // ==UserScript==
-// @name        MTurk Queue → JSONBin (New Work Only, Prune Finished)
+// @name        MTurk Queue 
+// @version      1.9
 // @namespace   Violentmonkey Scripts
 // @match       https://worker.mturk.com/tasks
 // @grant       GM_xmlhttpRequest
-// @version     1.9
-// @description Save MTurk queue to JSONBin only when new work arrives, prune finished ones
+// @updateURL    https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/mon.user.js
+// @downloadURL  https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/mon.user.js
+
 // ==/UserScript==
 
 (function () {
