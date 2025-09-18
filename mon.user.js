@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name        MTurk Queue 
-// @version      1.6
+// @version      1.7
 // @namespace   Violentmonkey Scripts
 // @match       https://worker.mturk.com/tasks
 // @grant       GM_xmlhttpRequest
@@ -27,13 +27,12 @@
   schedulePageReload();
   // 🔧 CONFIG
 
- const BIN_ID = "68cb027aae596e708ff224df";   // your JSONBin Bin ID
+const BIN_ID = "68cb027aae596e708ff224df";   // your JSONBin Bin ID
   const API_KEY = "$2a$10$5Xu0r2zBDI4WoeenpLIlV.7L5UO/QpjY4mgnUPNreMOt6AydK.gZG";
   const BIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
   const CHECK_INTERVAL_MS = 10000;
 
-  // local cache of known assignmentIds
-  let knownAssignments = new Set();
+  let lastAssignments = new Set();
 
   function decodeEntities(str) {
     const txt = document.createElement("textarea");
@@ -56,7 +55,20 @@
     }
   }
 
-  async function saveQueue(queue) {
+  async function saveQueue(newQueue) {
+    const existing = await fetchExistingBin();
+
+    // Keep only still-active assignmentIds
+    const activeIds = new Set(newQueue.map(h => h.assignmentId));
+    const merged = existing.filter(r => activeIds.has(r.assignmentId));
+
+    // Add any new ones not in merged
+    for (const row of newQueue) {
+      if (!merged.find(r => r.assignmentId === row.assignmentId)) {
+        merged.push(row);
+      }
+    }
+
     GM_xmlhttpRequest({
       method: "PUT",
       url: BIN_URL,
@@ -64,8 +76,8 @@
         "Content-Type": "application/json",
         "X-Master-Key": API_KEY
       },
-      data: JSON.stringify({ record: queue }),
-      onload: r => console.log("[MTurk→JSONBin] ✅ Saved queue:", queue.length, "rows"),
+      data: JSON.stringify({ record: merged }),
+      onload: r => console.log("[MTurk→JSONBin] ✅ Updated queue:", merged.length, "rows"),
       onerror: e => console.error("[MTurk→JSONBin] ❌ Error:", e)
     });
   }
@@ -98,31 +110,27 @@
 
   async function runOnce() {
     const queue = scrapeQueue();
-    if (queue.length === 0) return;
+    const currentAssignments = new Set(queue.map(h => h.assignmentId));
 
-    // find new assignmentIds compared to what we already know
-    const newOnes = queue.filter(hit => !knownAssignments.has(hit.assignmentId));
+    if (queue.length === 0) {
+      console.log("[MTurk→JSONBin] Queue empty — no API call.");
+      lastAssignments = currentAssignments;
+      return;
+    }
 
-    if (newOnes.length > 0) {
-      console.log("[MTurk→JSONBin] ✨ New work detected:", newOnes.map(h=>h.assignmentId));
-      // update local cache
-      queue.forEach(hit => knownAssignments.add(hit.assignmentId));
+    // Check if new work arrived
+    const newAssignments = [...currentAssignments].filter(a => !lastAssignments.has(a));
 
-      // fetch current bin, merge, then save
-      const existing = await fetchExistingBin();
-      const merged = [...existing];
-      for (const row of newOnes) {
-        if (!merged.find(r => r.assignmentId === row.assignmentId)) {
-          merged.push(row);
-        }
-      }
-      saveQueue(merged);
+    if (newAssignments.length > 0) {
+      console.log("[MTurk→JSONBin] ✨ New work detected:", newAssignments);
+      await saveQueue(queue);
     } else {
       console.log("[MTurk→JSONBin] No new work — skipping API call.");
     }
+
+    lastAssignments = currentAssignments;
   }
 
-  // run every 10s
   setInterval(runOnce, CHECK_INTERVAL_MS);
   runOnce();
 
