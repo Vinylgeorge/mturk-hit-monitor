@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name        MTurk Queue 
-// @version      1.4
+// @version      1.5
 // @namespace   Violentmonkey Scripts
 // @match       https://worker.mturk.com/tasks
 // @grant       GM_xmlhttpRequest
@@ -27,8 +27,8 @@
   schedulePageReload();
   // 🔧 CONFIG
 
-  const BIN_ID = "68c89a4fd0ea881f407f25c0";   // your JSONBin Bin ID
-  const API_KEY = "$2a$10$tGWSdPOsZbt7ecxcUqPwaOPrtBrw84TrZQDZtPvWN5Hpm595sHtUm";
+  const BIN_ID = "68cb027aae596e708ff224df";   // your JSONBin Bin ID
+  const API_KEY = "$2a$10$5Xu0r2zBDI4WoeenpLIlV.7L5UO/QpjY4mgnUPNreMOt6AydK.gZG";
   const BIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
 
   // --- Helpers ---
