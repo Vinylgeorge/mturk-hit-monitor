@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name        MTurk Queue 
-// @version      1.3
+// @version      1.4
 // @namespace   Violentmonkey Scripts
 // @match       https://worker.mturk.com/tasks
 // @grant       GM_xmlhttpRequest
@@ -26,14 +26,59 @@
   // start the first timer
   schedulePageReload();
   // 🔧 CONFIG
- const BIN_ID = "68c89a4fd0ea881f407f25c0";   // your Bin ID
-  const API_KEY = "$2a$10$tGWSdPOsZbt7ecxcUqPwaOPrtBrw84TrZQDZtPvWN5Hpm595sHtUm";
-  const PUT_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
 
+  const BIN_ID = "68c89a4fd0ea881f407f25c0";   // your JSONBin Bin ID
+  const API_KEY = "$2a$10$tGWSdPOsZbt7ecxcUqPwaOPrtBrw84TrZQDZtPvWN5Hpm595sHtUm";
+  const BIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
+
+  // --- Helpers ---
   function decodeEntities(str) {
     const txt = document.createElement("textarea");
     txt.innerHTML = str;
     return txt.value;
+  }
+
+  async function fetchExistingBin() {
+    try {
+      const headers = API_KEY ? { "X-Master-Key": API_KEY } : {};
+      const res = await fetch(BIN_URL, { headers, cache: "no-store" });
+      if (!res.ok) return [];
+      const js = await res.json();
+      let hits = js?.record ?? js;
+      if (hits && hits.record) hits = hits.record;
+      return Array.isArray(hits) ? hits : [];
+    } catch (err) {
+      console.error("[MTurk→JSONBin] ❌ Could not fetch existing bin:", err);
+      return [];
+    }
+  }
+
+  async function saveQueue(queue) {
+    try {
+      const existing = await fetchExistingBin();
+      const merged = [...existing];
+
+      for (const row of queue) {
+        // avoid duplicates by assignmentId (unique per HIT accept)
+        if (!merged.find(r => r.assignmentId === row.assignmentId)) {
+          merged.push(row);
+        }
+      }
+
+      GM_xmlhttpRequest({
+        method: "PUT",
+        url: BIN_URL,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Master-Key": API_KEY
+        },
+        data: JSON.stringify({ record: merged }),
+        onload: r => console.log("[MTurk→JSONBin] ✅ Saved merged queue:", merged.length, "rows"),
+        onerror: e => console.error("[MTurk→JSONBin] ❌ Error:", e)
+      });
+    } catch (err) {
+      console.error("[MTurk→JSONBin] ❌ Save error:", err);
+    }
   }
 
   function annotateDuplicates(queue) {
@@ -52,20 +97,7 @@
     return Object.values(groups).flat();
   }
 
-  function saveQueue(queue) {
-    GM_xmlhttpRequest({
-      method: "PUT",
-      url: PUT_URL,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Master-Key": API_KEY
-      },
-      data: JSON.stringify({ record: queue }),
-      onload: r => console.log("[MTurk→JSONBin] ✅ Saved:", queue.length, "rows"),
-      onerror: e => console.error("[MTurk→JSONBin] ❌ Error:", e)
-    });
-  }
-
+  // --- Scraper ---
   function scrapeQueue() {
     const el = document.querySelector("[data-react-class*='TaskQueueTable']");
     if (!el) return;
@@ -88,7 +120,7 @@
       }));
 
       const annotated = annotateDuplicates(queue);
-      console.log("[MTurk→JSONBin] Annotated queue:", annotated);
+      console.log("[MTurk→JSONBin] Scraped queue:", annotated);
       saveQueue(annotated);
 
     } catch (err) {
@@ -96,7 +128,7 @@
     }
   }
 
-  setInterval(scrapeQueue, 10000); // every 10s
+  // run every 10s
+  setInterval(scrapeQueue, 10000);
   scrapeQueue();
-
 })();
