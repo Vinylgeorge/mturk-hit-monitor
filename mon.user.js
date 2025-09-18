@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name        MTurk Queue 
-// @version      1.0
+// @version      1.3
 // @namespace   Violentmonkey Scripts
 // @match       https://worker.mturk.com/tasks
 // @grant       GM_xmlhttpRequest
@@ -26,41 +26,55 @@
   // start the first timer
   schedulePageReload();
   // 🔧 CONFIG
-  const BIN_ID = "68cb027aae596e708ff224df";   // your Bin ID
-  const API_KEY = "$2a$10$5Xu0r2zBDI4WoeenpLIlV.7L5UO/QpjY4mgnUPNreMOt6AydK.gZG"; // your API key
-  const BIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
-  const REFRESH_INTERVAL_MS = 10000;
+ const BIN_ID = "68c89a4fd0ea881f407f25c0";   // your Bin ID
+  const API_KEY = "$2a$10$tGWSdPOsZbt7ecxcUqPwaOPrtBrw84TrZQDZtPvWN5Hpm595sHtUm";
+  const PUT_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
 
-  // Decode HTML entities
   function decodeEntities(str) {
     const txt = document.createElement("textarea");
     txt.innerHTML = str;
     return txt.value;
   }
 
-  // Save queue (overwrite each time)
-  function saveQueueToJsonBin(queue) {
+  function annotateDuplicates(queue) {
+    const groups = {};
+    for (const hit of queue) {
+      const key = `${hit.requester}|${hit.title}|${hit.reward}|${hit.url}`;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(hit);
+    }
+    for (const key in groups) {
+      const group = groups[key];
+      if (group.length > 1) {
+        group[0].title = `${group[0].title} ([${group.length} times])`;
+      }
+    }
+    return Object.values(groups).flat();
+  }
+
+  function saveQueue(queue) {
     GM_xmlhttpRequest({
       method: "PUT",
-      url: BIN_URL,
+      url: PUT_URL,
       headers: {
         "Content-Type": "application/json",
         "X-Master-Key": API_KEY
       },
       data: JSON.stringify({ record: queue }),
-      onload: r => console.log("[MTurk→JSONBin] ✅ Queue saved:", queue),
-      onerror: e => console.error("[MTurk→JSONBin] ❌ Error saving queue:", e)
+      onload: r => console.log("[MTurk→JSONBin] ✅ Saved:", queue.length, "rows"),
+      onerror: e => console.error("[MTurk→JSONBin] ❌ Error:", e)
     });
   }
 
-  // Extract queue from React props
   function scrapeQueue() {
     const el = document.querySelector("[data-react-class*='TaskQueueTable']");
     if (!el) return;
 
     try {
       const props = JSON.parse(decodeEntities(el.getAttribute("data-react-props")));
-      const queue = (props.bodyData || []).map(hit => ({
+      if (!props.bodyData || !Array.isArray(props.bodyData)) return;
+
+      const queue = props.bodyData.map(hit => ({
         assignmentId: hit.assignment_id,
         hitId: hit.task_id,
         workerId: hit.question.value.match(/workerId=([^&]+)/)?.[1] || "",
@@ -73,16 +87,16 @@
         url: decodeEntities(hit.question.value)
       }));
 
-      console.log("[MTurk→JSONBin] Scraped queue", queue);
-      saveQueueToJsonBin(queue);
+      const annotated = annotateDuplicates(queue);
+      console.log("[MTurk→JSONBin] Annotated queue:", annotated);
+      saveQueue(annotated);
 
     } catch (err) {
-      console.error("[MTurk→JSONBin] ❌ Failed to scrape:", err);
+      console.error("[MTurk→JSONBin] ❌ Scrape failed:", err);
     }
   }
 
-  // Run every 10s
-  setInterval(scrapeQueue, REFRESH_INTERVAL_MS);
+  setInterval(scrapeQueue, 10000); // every 10s
   scrapeQueue();
 
 })();
