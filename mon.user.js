@@ -3,7 +3,7 @@
 // @namespace   Violentmonkey Scripts
 // @match       https://worker.mturk.com/tasks
 // @grant       GM_xmlhttpRequest
-// @version     2.2
+// @version     2.3
 // @updateURL    https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/mon.user.js
 // @downloadURL  https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/mon.user.js
 // ==/UserScript==
@@ -24,13 +24,14 @@ function schedulePageReload() {
 
   // start the first timer
   schedulePageReload();
+(function () {
+  'use strict';
 
   const BIN_ID = "68cb027aae596e708ff224df";   // your JSONBin Bin ID
   const API_KEY = "$2a$10$5Xu0r2zBDI4WoeenpLIlV.7L5UO/QpjY4mgnUPNreMOt6AydK.gZG";
   const BIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
   const CHECK_INTERVAL_MS = 10000;
 
-  // persistent memory of assignments already in JSONBin
   let knownAssignments = new Set();
   let initialized = false;
 
@@ -57,16 +58,16 @@ function schedulePageReload() {
 
   async function saveQueue(newQueue) {
     const existing = await fetchExistingBin();
+    if (!Array.isArray(existing)) return;
 
-    // keep only active assignmentIds
-    const activeIds = new Set(newQueue.map(h => h.assignmentId));
-    const merged = existing.filter(r => activeIds.has(r.assignmentId));
+    const currentWorkerId = newQueue[0]?.workerId || "";
 
-    // add new ones
+    // Keep everything except old entries from this worker
+    let merged = existing.filter(r => r.workerId !== currentWorkerId);
+
+    // Add this worker's fresh active queue
     for (const row of newQueue) {
-      if (!merged.find(r => r.assignmentId === row.assignmentId)) {
-        merged.push(row);
-      }
+      merged.push(row);
     }
 
     GM_xmlhttpRequest({
@@ -100,7 +101,8 @@ function schedulePageReload() {
         timeRemainingSeconds: hit.time_to_deadline_in_seconds,
         acceptedAt: hit.accepted_at,
         deadline: hit.deadline,
-        url: decodeEntities(hit.question.value)
+        url: decodeEntities(hit.question.value),
+        updatedAt: new Date().toISOString()
       }));
     } catch (err) {
       console.error("[MTurk→JSONBin] ❌ Scrape failed:", err);
@@ -127,13 +129,11 @@ function schedulePageReload() {
       return;
     }
 
-    const currentIds = new Set(queue.map(h => h.assignmentId));
     const newOnes = queue.filter(hit => !knownAssignments.has(hit.assignmentId));
 
     if (newOnes.length > 0) {
       console.log("[MTurk→JSONBin] ✨ New work detected:", newOnes.map(h => h.assignmentId));
       await saveQueue(queue);
-      // update known set
       for (const row of queue) knownAssignments.add(row.assignmentId);
     } else {
       console.log("[MTurk→JSONBin] No new work — skipping API call.");
