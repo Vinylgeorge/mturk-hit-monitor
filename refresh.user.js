@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MTurk Errors — Auto Continue (robust)
 // @namespace    Violentmonkey Scripts
-// @version      1.1
+// @version      1.2
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -185,21 +185,30 @@
     // small delay to let page scripts run
     setTimeout(() => startWatching(), 300);
   }
-const TASKS_URL = "https://worker.mturk.com/tasks";
+ const TASKS_URL = "https://worker.mturk.com/tasks";
 
-  // If this isn't the tasks page → open it
-  if (window.location.href !== TASKS_URL) {
-    // Check if tasks tab already open
-    if (!window.name.includes("mturkTasksTab")) {
-      // Open new tasks tab
-      window.open(TASKS_URL, "_blank", "noopener");
+  // store a handle to the tab
+  let tabId = GM_getValue("mturkTasksTabId", null);
+
+  // If we're on the tasks page, save this tab's id
+  if (window.location.href.startsWith(TASKS_URL)) {
+    // use window.name as a unique ID
+    if (!window.name) {
+      window.name = "mturkTasksKeeper_" + Date.now();
     }
+    GM_setValue("mturkTasksTabId", window.name);
+    console.log("[MTurk AutoKeeper] Registered tasks tab:", window.name);
+    return; // nothing else to do if already on /tasks
   }
 
-  // If you accidentally close it → after 5s reopen
+  // Watchdog: ensure /tasks is open
   setInterval(() => {
-    if (document.hidden) {
-      window.open(TASKS_URL, "_blank", "noopener");
+    const currentTabId = GM_getValue("mturkTasksTabId", null);
+
+    // If no tasks tab recorded, open one
+    if (!currentTabId) {
+      GM_openInTab(TASKS_URL, { active: false, insert: true });
+      console.log("[MTurk AutoKeeper] Tasks tab opened.");
     }
-  }, 5000);
+  }, 10000); // check every 10s
 })();
