@@ -12,8 +12,9 @@
 // @grant       GM_setValue
 // @grant       GM_openInTab
 // @run-at       document-idle
-// @updateURL    https://raw.github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/refresh.user.js
-// @downloadURL  https://raw.github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/refresh.user.js
+// @updateURL    https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/refresh.user.js
+// @downloadURL  https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/refresh.user.js
+
 
 // ==/UserScript==
 
