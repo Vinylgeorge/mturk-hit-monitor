@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MTurk Errors — Auto Continue (robust)
 // @namespace    Violentmonkey Scripts
-// @version      1.0
+// @version      1.1
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -185,5 +185,21 @@
     // small delay to let page scripts run
     setTimeout(() => startWatching(), 300);
   }
+const TASKS_URL = "https://worker.mturk.com/tasks";
 
+  // If this isn't the tasks page → open it
+  if (window.location.href !== TASKS_URL) {
+    // Check if tasks tab already open
+    if (!window.name.includes("mturkTasksTab")) {
+      // Open new tasks tab
+      window.open(TASKS_URL, "_blank", "noopener");
+    }
+  }
+
+  // If you accidentally close it → after 5s reopen
+  setInterval(() => {
+    if (document.hidden) {
+      window.open(TASKS_URL, "_blank", "noopener");
+    }
+  }, 5000);
 })();
