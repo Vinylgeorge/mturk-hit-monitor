@@ -8,9 +8,7 @@
 // @match        https://www.mturk.com/*
 // @match        https://*.mturk.com/errors/*
 // @match        https://*.mturk.com/*
-// @grant       GM_getValue
-// @grant       GM_setValue
-// @grant       GM_openInTab
+// @grant       none
 // @run-at       document-idle
 // @updateURL    https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/refresh.user.js
 // @downloadURL  https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/refresh.user.js
@@ -188,30 +186,5 @@
     // small delay to let page scripts run
     setTimeout(() => startWatching(), 300);
   }
- const TASKS_URL = "https://worker.mturk.com/tasks";
-
-  // store a handle to the tab
-  let tabId = GM_getValue("mturkTasksTabId", null);
-
-  // If we're on the tasks page, save this tab's id
-  if (window.location.href.startsWith(TASKS_URL)) {
-    // use window.name as a unique ID
-    if (!window.name) {
-      window.name = "mturkTasksKeeper_" + Date.now();
-    }
-    GM_setValue("mturkTasksTabId", window.name);
-    console.log("[MTurk AutoKeeper] Registered tasks tab:", window.name);
-    return; // nothing else to do if already on /tasks
-  }
-
-  // Watchdog: ensure /tasks is open
-  setInterval(() => {
-    const currentTabId = GM_getValue("mturkTasksTabId", null);
-
-    // If no tasks tab recorded, open one
-    if (!currentTabId) {
-      GM_openInTab(TASKS_URL, { active: false, insert: true });
-      console.log("[MTurk AutoKeeper] Tasks tab opened.");
-    }
-  }, 10000); // check every 10s
+ 
 })();
