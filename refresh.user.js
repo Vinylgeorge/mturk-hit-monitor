@@ -1,14 +1,16 @@
 // ==UserScript==
 // @name         MTurk Errors — Auto Continue (robust)
 // @namespace    Violentmonkey Scripts
-// @version      1.2
+// @version      1.3
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
 // @match        https://www.mturk.com/*
 // @match        https://*.mturk.com/errors/*
 // @match        https://*.mturk.com/*
-// @grant        none
+// @grant       GM_getValue
+// @grant       GM_setValue
+// @grant       GM_openInTab
 // @run-at       document-idle
 // @updateURL    https://raw.github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/refresh.user.js
 // @downloadURL  https://raw.github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/refresh.user.js
