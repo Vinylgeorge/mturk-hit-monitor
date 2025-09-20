@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MTurk Errors — Auto Continue (robust)
 // @namespace    Violentmonkey Scripts
-// @version      1.4
+// @version      1.5
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -54,7 +54,49 @@
     if (prim) return prim;
     return null;
   }
+ let popup = null;
 
+  // Button styles
+  const style = document.createElement("style");
+  style.textContent = `
+    #mturkQueueBtn {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #2c3e50;
+      color: #fff;
+      font-size: 14px;
+      padding: 8px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      z-index: 99999;
+      box-shadow: 0 3px 8px rgba(0,0,0,0.3);
+      font-family: sans-serif;
+    }
+    #mturkQueueBtn:hover {
+      background: #34495e;
+    }
+  `;
+  document.head.appendChild(style);
+
+  // Add floating button
+  const btn = document.createElement("div");
+  btn.id = "mturkQueueBtn";
+  btn.textContent = "📋 Queue";
+  document.body.appendChild(btn);
+
+  btn.onclick = () => {
+    // If popup already open, focus it
+    if (popup && !popup.closed) {
+      popup.focus();
+    } else {
+      popup = window.open(
+        "https://worker.mturk.com/tasks",
+        "mturkQueuePopup",
+        "width=500,height=400,top=100,left=" + (window.screen.width - 520)
+      );
+    }
+  };
   function synthClick(el) {
     try {
       el.focus && el.focus();
