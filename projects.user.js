@@ -6,7 +6,7 @@
 // @version     1.1
 // @updateURL    https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/projects.user.js
 // @downloadURL  https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/projects.user.js
-
+// ==/UserScript==
 (function () {
   'use strict';
 
