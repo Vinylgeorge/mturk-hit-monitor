@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MTurk Errors — Auto Continue (robust)
 // @namespace    Violentmonkey Scripts
-// @version      1.6
+// @version      1.7
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -229,7 +229,7 @@
     setTimeout(() => startWatching(), 300);
   }
  function scheduleMTurkPopup() {
-  const min = 10, max = 15;
+  const min = 60, max = 90;
   const delay = Math.floor(Math.random() * (max - min + 1) + min) * 1000;
 
   setTimeout(() => {
