@@ -3,14 +3,14 @@
 // @namespace   Violentmonkey Scripts
 // @match       https://worker.mturk.com/projects/*/tasks/*
 // @grant       GM_xmlhttpRequest
-// @version     1.1
+// @version     1.2
 // @updateURL    https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/projects.user.js
 // @downloadURL  https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/projects.user.js
 // ==/UserScript==
 (function () {
   'use strict';
 
-  const BIN_ID = "68c89a4fd0ea881f407f25c0";   // your JSONBin Bin ID
+  const BIN_ID = "68c88afcd0ea881f407f17fd";   // your JSONBin Bin ID
   const API_KEY = "$2a$10$tGWSdPOsZbt7ecxcUqPwaOPrtBrw84TrZQDZtPvWN5Hpm595sHtUm";
   const BIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
 
