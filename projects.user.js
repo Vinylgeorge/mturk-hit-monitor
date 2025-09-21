@@ -4,8 +4,8 @@
 // @match       https://worker.mturk.com/projects/*/tasks/*
 // @grant       GM_xmlhttpRequest
 // @version     1.0
-//
-// ==/UserScript==
+// @updateURL    https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/projects.user.js
+// @downloadURL  https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/projects.user.js
 
 (function () {
   'use strict';
