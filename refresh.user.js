@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MTurk Errors — Auto Continue (robust)
 // @namespace    Violentmonkey Scripts
-// @version      1.7
+// @version      1.8
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -229,14 +229,14 @@
     setTimeout(() => startWatching(), 300);
   }
  function scheduleMTurkPopup() {
-  const min = 60, max = 90;
+  const min = 150, max = 240;
   const delay = Math.floor(Math.random() * (max - min + 1) + min) * 1000;
 
   setTimeout(() => {
     const w = window.open(
       "https://worker.mturk.com",
       "mturkPopup",
-      "width=400,height=300,left=50,top=50"
+      "width=100,height=100,left=50,top=50"
     );
     if (w) {
       // Blur so it won't steal focus
