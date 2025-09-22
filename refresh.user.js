@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MTurk Errors — Auto Continue (robust)
 // @namespace    Violentmonkey Scripts
-// @version      1.8
+// @version      1.9
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -79,24 +79,7 @@
   `;
   document.head.appendChild(style);
 
-  // Add floating button
-  const btn = document.createElement("div");
-  btn.id = "mturkQueueBtn";
-  btn.textContent = "📋 Queue";
-  document.body.appendChild(btn);
-
-  btn.onclick = () => {
-    // If popup already open, focus it
-    if (popup && !popup.closed) {
-      popup.focus();
-    } else {
-      popup = window.open(
-        "https://worker.mturk.com/tasks",
-        "mturkQueuePopup",
-        "width=500,height=400,top=100,left=" + (window.screen.width - 520)
-      );
-    }
-  };
+ 
   function synthClick(el) {
     try {
       el.focus && el.focus();
