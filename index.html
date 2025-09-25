@@ -1,13 +1,13 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
   <meta charset="UTF-8">
-  <title>MTurk Accepted HITs — Live Monitor</title>
+  <title>📊 MTurk Accepted HITs</title>
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
     import { getFirestore, collection, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-    // 🔑 Firebase Config
+    // 🔑 Your Firestore config
     const firebaseConfig = {
       apiKey: "AIzaSyC57W83XkxdvM2aMQK8GIRYR2SJH1ORdfQ",
       authDomain: "mturk-tasks-72994.firebaseapp.com",
@@ -17,52 +17,35 @@
       appId: "1:305467873275:web:7b96048865c5305df1dd5e"
     };
 
+    // Init Firestore
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
 
+    // Listen in real-time
     const tableBody = document.getElementById("hits-body");
 
-    function renderHits(snapshot) {
-      tableBody.innerHTML = "";
-      if (snapshot.empty) {
-        console.warn("⚠️ No documents in 'hits' collection yet.");
-        const row = document.createElement("tr");
-        row.innerHTML = `<td colspan="6" style="text-align:center;color:#888;">No HITs yet</td>`;
-        tableBody.appendChild(row);
-        return;
-      }
-
+    onSnapshot(collection(db, "hits"), (snapshot) => {
+      tableBody.innerHTML = ""; // clear
       snapshot.forEach(doc => {
-        const hit = doc.data();
-        console.log("📥 Got HIT:", doc.id, hit);
-        const row = document.createElement("tr");
-        row.innerHTML = `
-          <td>${hit.workerId || "-"}</td>
-          <td>${hit.requester || ""}</td>
-          <td>${hit.title || ""}</td>
-          <td>${hit.reward ?? 0}</td>
-          <td>${hit.acceptedAt ? new Date(hit.acceptedAt).toLocaleString() : ""}</td>
-          <td>${hit.remainingSeconds != null ? hit.remainingSeconds + "s" : "-"}</td>
+        const h = doc.data();
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${h.workerId || "-"}</td>
+          <td>${h.requester || "-"}</td>
+          <td>${h.title || "-"}</td>
+          <td>${h.reward || "0.00"}</td>
+          <td>${h.acceptedAt ? new Date(h.acceptedAt).toLocaleString() : "-"}</td>
         `;
-        tableBody.appendChild(row);
+        tableBody.appendChild(tr);
       });
-    }
-
-    // 📡 Real-time Firestore listener
-    onSnapshot(collection(db, "hits"), renderHits);
+    }, (err) => {
+      console.error("❌ Firestore error:", err);
+    });
   </script>
-  <style>
-    body { font-family: Arial, sans-serif; background: #f9f9f9; padding: 20px; }
-    h1 { text-align: center; }
-    table { width: 100%; border-collapse: collapse; background: white; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-    th, td { padding: 8px 12px; border: 1px solid #ddd; text-align: left; }
-    th { background: #0073e6; color: white; }
-    tr:nth-child(even) { background: #f2f2f2; }
-  </style>
 </head>
-<body>
-  <h1>📥 Live MTurk Accepted HITs</h1>
-  <table>
+<body style="font-family: Arial, sans-serif; padding: 20px;">
+  <h1>📥 MTurk Accepted HITs</h1>
+  <table border="1" cellpadding="6" cellspacing="0">
     <thead>
       <tr>
         <th>Worker ID</th>
@@ -70,11 +53,10 @@
         <th>Title</th>
         <th>Reward ($)</th>
         <th>Accepted At</th>
-        <th>Time Left</th>
       </tr>
     </thead>
     <tbody id="hits-body">
-      <tr><td colspan="6" style="text-align:center;">⏳ Connecting…</td></tr>
+      <tr><td colspan="5">⏳ Waiting for data...</td></tr>
     </tbody>
   </table>
 </body>
