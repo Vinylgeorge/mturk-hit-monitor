@@ -20,6 +20,7 @@
     .pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#eef6ff}
     .muted{color:var(--muted)}
     .right{margin-left:auto}
+    .empty{padding:18px;color:var(--muted)}
   </style>
 </head>
 <body>
@@ -43,20 +44,20 @@
         <th>TTL Left</th>
       </tr>
     </thead>
-    <tbody id="rows"></tbody>
+    <tbody id="rows"><tr><td colspan="6" class="empty">No data yet</td></tr></tbody>
   </table>
 </div>
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, collection, query, where, orderBy, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getFirestore, collection, query, where, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-  // 🔑 Your project (read-only in the browser)
+  // ✅ Corrected config (apiKey & storageBucket)
   const firebaseConfig = {
     apiKey: "AIzaSyC57W83XkxdvM2aMQK8GIRYR2SJH1ORdfQ",
     authDomain: "mturk-tasks-72994.firebaseapp.com",
     projectId: "mturk-tasks-72994",
-    storageBucket: "mturk-tasks-72994.firebasestorage.app",
+    storageBucket: "mturk-tasks-72994.appspot.com",
     messagingSenderId: "305467873275",
     appId: "1:305467873275:web:7b96048865c5305df1dd5e"
   };
@@ -69,28 +70,32 @@
   const widInput = document.getElementById('wid');
   const connectBtn = document.getElementById('connectBtn');
 
-  // Allow ?worker=A2... in URL
+  // support ?worker=A2XXXX...
   const urlWid = new URL(location.href).searchParams.get('worker');
   if (urlWid) widInput.value = urlWid;
 
   let unsub = null;
   let cache = [];
 
-  // helpers
   const toMillis = (ts) => {
-    if (!ts) return null;
+    if (!ts) return 0;
     if (typeof ts === 'number') return ts;
     if (typeof ts === 'object' && typeof ts.toMillis === 'function') return ts.toMillis();
-    const t = Date.parse(ts); return Number.isNaN(t) ? null : t;
+    const t = Date.parse(ts); return Number.isNaN(t) ? 0 : t;
   };
 
   function render() {
     const now = Date.now();
+    if (!cache.length) {
+      rows.innerHTML = '<tr><td colspan="6" class="empty">No data yet</td></tr>';
+      return;
+    }
     rows.innerHTML = cache.map(h => {
       const createdMs = toMillis(h.createdAt);
       const expiresMs = toMillis(h.expiresAt);
       const ttlMs = Math.max(0, (expiresMs || 0) - now);
-      const ttl = Math.ceil(ttlMs / 1000); const m = Math.floor(ttl/60), s = ttl % 60;
+      const ttlSec = Math.ceil(ttlMs / 1000);
+      const m = Math.floor(ttlSec/60), s = ttlSec % 60;
       return `
         <tr>
           <td><span class="pill">${h.assignmentId}</span></td>
@@ -98,26 +103,28 @@
           <td>${h.title || ""}</td>
           <td>$${Number(h.reward||0).toFixed(2)}</td>
           <td>${createdMs ? new Date(createdMs).toLocaleTimeString() : "-"}</td>
-          <td>${ttl ? `${m}m ${String(s).padStart(2,"0")}s` : "expired"}</td>
+          <td>${ttlSec ? `${m}m ${String(s).padStart(2,"0")}s` : "expired"}</td>
         </tr>`;
     }).join('');
   }
 
-  function rafTick(){ render(); requestAnimationFrame(rafTick); }
+  function startTicker(){ render(); requestAnimationFrame(startTicker); }
 
   function connect(workerId) {
     if (unsub) { unsub(); unsub = null; }
-    cache = []; rows.innerHTML = ''; statusEl.textContent = 'Connecting…';
+    cache = [];
+    rows.innerHTML = '<tr><td colspan="6" class="empty">Loading…</td></tr>';
+    statusEl.textContent = 'Connecting…';
 
     const hitsRef = collection(db, 'hits');
-    const qref = query(
-      hitsRef,
-      where('workerId','==', workerId),
-      orderBy('createdAt','desc')
-    );
+
+    // 🔁 NO orderBy here → avoids composite-index requirement
+    const qref = query(hitsRef, where('workerId','==', workerId));
 
     unsub = onSnapshot(qref, (snap) => {
       cache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      // sort client-side by createdAt desc
+      cache.sort((a,b) => toMillis(b.createdAt) - toMillis(a.createdAt));
       statusEl.textContent = `Live: ${cache.length} item(s)`;
       render();
     }, (err) => {
@@ -133,7 +140,7 @@
   });
 
   if (widInput.value) connect(widInput.value);
-  rafTick();
+  startTicker();
 </script>
 </body>
 </html>
