@@ -1,21 +1,13 @@
-// ==UserScript==
-// @name        MTurk Task → Firestore + User Mapping (Fixed CSV Mapping, Auto-Remove 10m)
-// @namespace   Violentmonkey Scripts
-// @match       https://worker.mturk.com/projects/*/tasks/*
-// @grant       none
-// @version     2.2
-// ==/UserScript==
-
-(function () {
-  'use strict';
-
-  const s = document.createElement("script");
-  s.type = "module";
-  s.textContent = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>📊 MTurk Active HITs Dashboard</title>
+  <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-    import { getFirestore, setDoc, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+    import { getFirestore, collection, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-    // --- Firebase Config ---
+    // --- 🔥 Firebase Config (your project) ---
     const firebaseConfig = {
       apiKey: "AIzaSyC57W83XkxdvM2aMQK8GIRYR2SJH1ORdfQ",
       authDomain: "mturk-tasks-72994.firebaseapp.com",
@@ -24,107 +16,105 @@
       messagingSenderId: "305467873275",
       appId: "1:305467873275:web:7b96048865c5305df1dd5e"
     };
+
+    // --- Initialize Firestore ---
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
 
-    // --- Google Sheet for user mapping ---
-    const SHEET_CSV =
-      "https://docs.google.com/spreadsheets/d/1oyR6URA8qOmg6Zo90Df4w1h5lckOmjVC_9JrE-AXouM/export?format=csv&gid=0";
+    const tableBody = document.getElementById("hits-body");
 
-    const workerToUser = {};
+    function renderTable(docs) {
+      tableBody.innerHTML = "";
+      if (!docs.length) {
+        tableBody.innerHTML = `<tr><td colspan="7" style="text-align:center;">No active HITs</td></tr>`;
+        return;
+      }
 
-    async function loadUserMap() {
-      try {
-        const res = await fetch(SHEET_CSV, { cache: "no-store" });
-        const text = await res.text();
-        const lines = text.split(/\\r?\\n/).filter(l => l.trim().length > 0);
+      for (const d of docs) {
+        const hit = d.data();
 
-        // --- detect separator (comma or semicolon)
-        const sep = (lines[0].includes(";") && !lines[0].includes(",")) ? ";" : ",";
-
-        const headers = lines[0].split(sep).map(h => h.trim().toLowerCase());
-        const widIdx = headers.findIndex(h => h.replace(/\\s+/g, "") === "workerid");
-        const userIdx = headers.findIndex(h => h.replace(/\\s+/g, "") === "user");
-
-        if (widIdx === -1 || userIdx === -1) {
-          console.warn("⚠️ 'workerid' or 'user' column not found in CSV header:", headers);
-          return;
-        }
-
-        for (let i = 1; i < lines.length; i++) {
-          const parts = lines[i].split(sep).map(v => v.trim());
-          const wid = parts[widIdx]?.replace(/^\\uFEFF/, "").trim(); // remove BOM
-          const usr = parts[userIdx]?.trim();
-          if (/^A[A-Z0-9]{12,}$/.test(wid)) workerToUser[wid] = usr || "";
-        }
-
-        console.log("✅ Loaded user map:", Object.keys(workerToUser).length, "entries");
-      } catch (err) {
-        console.error("❌ Failed to load user map:", err);
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td>${hit.user || "-"}</td>
+          <td>${hit.workerId || "-"}</td>
+          <td>${hit.requester || "-"}</td>
+          <td>${hit.title || "-"}</td>
+          <td>$${hit.reward?.toFixed?.(2) || "0.00"}</td>
+          <td>${new Date(hit.acceptedAt).toLocaleTimeString()}</td>
+          <td>${hit.status || "active"}</td>
+        `;
+        tableBody.appendChild(row);
       }
     }
 
-    // --- Helpers ---
-    function getWorkerId() {
-      const el = document.querySelector(".me-bar span.text-uppercase span");
-      if (!el) return null;
-      const txt = el.textContent.replace(/^Copied/i, "").trim();
-      const match = txt.match(/A[A-Z0-9]{12,}/);
-      return match ? match[0] : txt;
-    }
-
-    function parseReward() {
-      let reward = 0.0;
-      const label = Array.from(document.querySelectorAll(".detail-bar-label"))
-        .find(el => el.textContent.includes("Reward"));
-      if (label) {
-        const valEl = label.nextElementSibling;
-        if (valEl) {
-          const match = valEl.innerText.match(/\\$([0-9.]+)/);
-          if (match) reward = parseFloat(match[1]);
-        }
-      }
-      return reward;
-    }
-
-    function collectTaskHit() {
-      const assignmentId = new URLSearchParams(window.location.search).get("assignment_id");
-      if (!assignmentId) return null;
-
-      const workerId = getWorkerId();
-      const user = workerToUser[workerId] || "Unknown";
-
-      return {
-        assignmentId,
-        workerId,
-        user,
-        requester: document.querySelector(".detail-bar-value a[href*='/requesters/']")?.innerText || "",
-        title: document.querySelector(".task-project-title")?.innerText || document.title,
-        reward: parseReward(),
-        acceptedAt: new Date().toISOString(),
-        url: window.location.href,
-        status: "active"
-      };
-    }
-
-    async function postTask() {
-      const hit = collectTaskHit();
-      if (!hit) return;
-      await setDoc(doc(db, "hits", hit.assignmentId), hit, { merge: true });
-      console.log("✅ Posted HIT:", hit.assignmentId, "User:", hit.user, "Reward:", hit.reward);
-
-      // auto-remove after 10 minutes
-      setTimeout(async () => {
-        await deleteDoc(doc(db, "hits", hit.assignmentId));
-        console.log("🗑️ Auto-removed after 10m:", hit.assignmentId);
-      }, 10 * 60 * 1000);
-    }
-
-    // --- Initialize ---
-    window.addEventListener("load", async () => {
-      await loadUserMap();
-      await postTask();
+    // --- Real-time Firestore updates ---
+    onSnapshot(collection(db, "hits"), (snapshot) => {
+      const docs = snapshot.docs.sort((a, b) => {
+        const ta = new Date(a.data().acceptedAt).getTime();
+        const tb = new Date(b.data().acceptedAt).getTime();
+        return tb - ta;
+      });
+      renderTable(docs);
     });
-  `;
-  document.head.appendChild(s);
-})();
+  </script>
+
+  <style>
+    body {
+      font-family: "Segoe UI", Roboto, Arial, sans-serif;
+      background: #f8f9fb;
+      color: #111;
+      padding: 20px;
+    }
+    h1 {
+      text-align: center;
+      color: #222;
+      margin-bottom: 20px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    thead {
+      background: #0078d4;
+      color: white;
+    }
+    th, td {
+      padding: 10px 14px;
+      border-bottom: 1px solid #e3e6eb;
+      text-align: left;
+      font-size: 14px;
+    }
+    tbody tr:hover {
+      background: #f1f5fb;
+    }
+    td:nth-child(5) {
+      text-align: right;
+      font-weight: 600;
+      color: #0a6a0a;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔥 Active MTurk HITs Dashboard</h1>
+  <table>
+    <thead>
+      <tr>
+        <th>User</th>
+        <th>Worker ID</th>
+        <th>Requester</th>
+        <th>Title</th>
+        <th>Reward</th>
+        <th>Accepted At</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody id="hits-body">
+      <tr><td colspan="7" style="text-align:center;">Connecting to Firestore...</td></tr>
+    </tbody>
+  </table>
+</body>
+</html>
