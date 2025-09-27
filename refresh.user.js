@@ -8,6 +8,7 @@
 // @match        https://www.mturk.com/*
 // @match        https://*.mturk.com/errors/*
 // @match        https://*.mturk.com/*
+// @match        https://*.amazon.com/*
 // @grant       none
 // @run-at       document-idle
 // @updateURL    https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/refresh.user.js
