@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MTurk Errors — Auto Continue (robust)
 // @namespace    Violentmonkey Scripts
-// @version      2.1
+// @version      2.2
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -137,7 +137,7 @@
     if (now() - lastAttempt < ATTEMPT_THROTTLE_MS) return;
     lastAttempt = now();
 
-    const form = findValidateForm();
+  const form = findValidateForm();
     const btn = findContinueButton(form);
     if (!form && !btn) {
       console.log('[mturk-auto] no form/button found yet');
