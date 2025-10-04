@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MTurk Errors — Auto Continue (robust)
 // @namespace    Violentmonkey Scripts
-// @version      2.2
+// @version      2.3
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -237,4 +237,17 @@
 
 // Start the popup loop
 scheduleMTurkPopup();
+   function closeIfSubmitted() {
+    if (document.body.innerText.includes("HIT Submitted")) {
+      console.log("[MTurk AutoClose] HIT Submitted detected — closing tab...");
+      window.close();
+    }
+  }
+
+  // Observe for React content changes (MTurk loads dynamically)
+  const observer = new MutationObserver(closeIfSubmitted);
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  // Also run once on page load
+  window.addEventListener('load', closeIfSubmitted);
 })();
