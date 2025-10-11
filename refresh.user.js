@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MTurk Errors — Auto Continue (robust)
 // @namespace    Violentmonkey Scripts
-// @version      2.4
+// @version      2.5
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -27,6 +27,56 @@
   let observer = null;
 
   function now() { return Date.now(); }
+
+function AB2softTabLimiter() {
+  const MAX_TABS = 3;              // allow any 3 tabs total
+  const STORAGE_KEY = "AB2_TAB_TRACKER";
+  const CHECK_DELAY = 1500;        // wait 1.5 s before enforcing (stabilization)
+  const STALE_AGE = 8000;          // remove tabs not updated in 8 s
+  const tabId = Date.now() + Math.random().toString(16).slice(2);
+
+  // helpers
+  const getTabs = () => {
+    try {
+      const all = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      const now = Date.now();
+      for (const [id, rec] of Object.entries(all)) {
+        if (!rec || now - rec.time > STALE_AGE) delete all[id]; // purge old
+      }
+      return all;
+    } catch { return {}; }
+  };
+  const saveTabs = (obj) => localStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
+  const cleanup = () => { const t = getTabs(); delete t[tabId]; saveTabs(t); };
+
+  // register this tab with timestamp
+  const tabs = getTabs();
+  tabs[tabId] = { url: location.href, time: Date.now() };
+  saveTabs(tabs);
+  window.addEventListener("beforeunload", cleanup);
+
+  // update heartbeat every few seconds so this tab isn't seen as stale
+  setInterval(() => {
+    const t = getTabs();
+    if (t[tabId]) { t[tabId].time = Date.now(); saveTabs(t); }
+  }, 3000);
+
+  // enforce after short delay
+  setTimeout(() => {
+    const allTabs = Object.keys(getTabs());
+    if (allTabs.length > MAX_TABS) {
+      console.log("AB2soft: closing extra tab →", location.href);
+      try { window.close(); } catch (_) {}
+    }
+  }, CHECK_DELAY);
+}
+
+// run once when your script starts
+AB2softTabLimiter();
+
+
+
+
 
   function findValidateForm() {
     // prefer explicit validateCaptcha form
@@ -80,7 +130,7 @@
   `;
   document.head.appendChild(style);
 
- 
+
   function synthClick(el) {
     try {
       el.focus && el.focus();
