@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MTurk Errors — Auto Continue (robust)
 // @namespace    Violentmonkey Scripts
-// @version      2.5
+// @version      2.6
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -73,6 +73,23 @@ function AB2softTabLimiter() {
 
 // run once when your script starts
 AB2softTabLimiter();
+  function AB2softAutoCloseEmptyHit() {
+    const checkInterval = setInterval(() => {
+      const alertBox = document.querySelector('div[data-react-class*="alert/Alert"]');
+      if (!alertBox) return;
+
+      const text = alertBox.textContent?.trim() || "";
+      if (text.includes("There are no more of these HITs available")) {
+        console.log("🚫 No more HITs available — closing tab...");
+        clearInterval(checkInterval);
+        window.close();
+      }
+    }, 1000);
+    setTimeout(() => clearInterval(checkInterval), 20000);
+  }
+
+  // --- Then just call it anywhere you want ---
+  AB2softAutoCloseEmptyHit();
 
 
 
