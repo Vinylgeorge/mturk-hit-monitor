@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         Smart Auto Payment Scheduler 
 // @namespace    Violentmonkey Scripts
-// @version      3.6
+// @version      3.7
 // @description  Automatically adjust payment cycle
 // @match        https://worker.mturk.com/payment_schedule*
 // @grant        none
+// @updateURL    https://github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/Pay_schedule.user.js
+// @downloadURL  https://github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/Pay_schedule.user.js
 // ==/UserScript==
 
 (function () {
