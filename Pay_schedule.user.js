@@ -32,7 +32,7 @@
         return;
       }
 
-      // Prefer bank if available
+     
       const hasBank = !!document.querySelector("a[href*='/direct_deposit']");
       (hasBank ? bankOpt : giftOpt).checked = true;
       (hasBank ? bankOpt : giftOpt).dispatchEvent(new Event("change", { bubbles: true }));
