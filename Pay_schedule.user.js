@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Smart Auto Payment Scheduler
+// @name         AB2soft Smart Auto Payment Scheduler (Silent + Auto + Manual)
 // @namespace    Violentmonkey Scripts
-// @version      2.5
-// @description  Always allows manual 1–4 key override; auto-chooses cycle based on date & earnings; shows floating status banner
+// @version      3.4
+// @description  Automatically adjust payment cycle based on date & earnings; always allows manual override via 1–4 keys (no banners)
 // @match        https://worker.mturk.com/payment_schedule*
 // @grant        none
 // ==/UserScript==
@@ -14,53 +14,6 @@
   const date = today.getDate();
   const earnings = parseFloat(localStorage.getItem("mturk_current_earnings") || "10");
   const log = (msg) => console.log(`[AB2soft] ${msg}`);
-
-  // ---- Banner ----
-  function showBanner(text, color = "#ff9800") {
-    let banner = document.getElementById("ab2softBanner");
-    if (!banner) {
-      banner = document.createElement("div");
-      banner.id = "ab2softBanner";
-      Object.assign(banner.style, {
-        position: "fixed",
-        top: "15px",
-        right: "15px",
-        background: color,
-        color: "#fff",
-        padding: "10px 16px",
-        borderRadius: "8px",
-        fontFamily: "Segoe UI, sans-serif",
-        fontSize: "14px",
-        zIndex: "999999",
-        boxShadow: "0 4px 10px rgba(0,0,0,0.3)",
-        cursor: "move",
-      });
-      document.body.appendChild(banner);
-
-      // make draggable
-      let offsetX = 0, offsetY = 0, dragging = false;
-      banner.addEventListener("mousedown", (e) => {
-        dragging = true;
-        offsetX = e.clientX - banner.offsetLeft;
-        offsetY = e.clientY - banner.offsetTop;
-      });
-      document.addEventListener("mouseup", () => dragging = false);
-      document.addEventListener("mousemove", (e) => {
-        if (dragging) {
-          banner.style.left = e.clientX - offsetX + "px";
-          banner.style.top = e.clientY - offsetY + "px";
-          banner.style.right = "auto";
-        }
-      });
-    }
-    banner.textContent = `⚙️ ${text}`;
-    banner.style.background = color;
-  }
-
-  function hideBanner(delay = 4000) {
-    const banner = document.getElementById("ab2softBanner");
-    if (banner) setTimeout(() => banner.remove(), delay);
-  }
 
   // --------------------------
   // PAGE 1: /payment_schedule
@@ -75,11 +28,11 @@
       const updateBtn = document.querySelector("input[type='submit'][value='Update']");
       const radios = document.querySelectorAll("input[name='disbursement_schedule_form[frequency]']");
       if (!bankOpt || !giftOpt || !updateBtn || !radios.length) {
-        log("⚠️ Missing expected form elements!");
+        log("⚠️ Missing form elements!");
         return;
       }
 
-      // --- Prefer bank ---
+      // Prefer bank if available
       const hasBank = !!document.querySelector("a[href*='/direct_deposit']");
       (hasBank ? bankOpt : giftOpt).checked = true;
       (hasBank ? bankOpt : giftOpt).dispatchEvent(new Event("change", { bubbles: true }));
@@ -91,24 +44,20 @@
       // ---------- AUTO RULES ----------
       if (date >= 1 && date <= 17 && earnings < 20) {
         newValue = "14";
-        showBanner("Auto Mode: 14-day (early, low earnings)", "#2196f3");
-        log("📆 Auto: 14-day transfer");
+        log("📆 Auto: 14-day transfer (early, low earnings)");
       } else if (earnings >= 20) {
         if (current === "3") {
-          showBanner("Already 3-day cycle — No change", "#4caf50");
-          log("✅ Already 3-day — no change");
+          log("✅ Already 3-day cycle (no change).");
           return;
         } else {
           newValue = "3";
-          showBanner("Auto Mode: 3-day (high earnings)", "#4caf50");
-          log("💰 Auto: 3-day transfer");
+          log("💰 Auto: 3-day transfer (high earnings)");
         }
       } else {
-        showBanner("Manual Mode Active — Press 1→3d, 2→7d, 3→14d, 4→30d", "#ff5722");
-        log("⌨️ Manual: waiting for keypress (1–4)");
+        log("⌨️ Manual Mode Active — Press 1→3d, 2→7d, 3→14d, 4→30d");
       }
 
-      // ---------- MANUAL MODE ALWAYS ACTIVE ----------
+      // ---------- MANUAL OVERRIDE ----------
       document.addEventListener("keydown", (e) => {
         const keyMap = { "1": "3", "2": "7", "3": "14", "4": "30" };
         if (keyMap[e.key]) {
@@ -117,15 +66,14 @@
           if (target) {
             target.checked = true;
             target.dispatchEvent(new Event("change", { bubbles: true }));
-            showBanner(`Manual Override → ${val}-day selected`, "#9c27b0");
             log(`🎯 Manual override → ${val}-day`);
             setTimeout(() => {
               const form = updateBtn.closest("form");
               if (form) {
+                log("🚀 Submitting manual change …");
                 form.submit();
-                hideBanner();
               }
-            }, 1000);
+            }, 800);
           }
         }
       });
@@ -140,37 +88,34 @@
           const form = updateBtn.closest("form");
           if (form) {
             setTimeout(() => {
+              log(`🚀 Submitting update (${newValue}-day)`);
               form.submit();
-              hideBanner();
-            }, 1500);
+            }, 1200);
           }
         }
       }
-    }, 1500);
+    }, 1200);
   }
 
   // --------------------------
   // PAGE 2: /payment_schedule/submit
   // --------------------------
   else if (page === "/payment_schedule/submit") {
-    showBanner("Confirming payment schedule…", "#607d8b");
     setTimeout(() => {
       const confirmBtn = document.querySelector("a.btn.btn-primary[href*='/payment_schedule/confirm']");
       if (confirmBtn) {
+        log("🔘 Clicking Confirm …");
         confirmBtn.click();
-        hideBanner();
       } else {
         log("⚠️ Confirm button not found.");
       }
-    }, 2000);
+    }, 1800);
   }
 
   // --------------------------
   // PAGE 3: /payment_schedule/confirm
   // --------------------------
   else if (page.startsWith("/payment_schedule/confirm")) {
-    showBanner("✅ Payment schedule confirmed!", "#4caf50");
-    hideBanner();
     log("🎉 Payment schedule confirmed successfully!");
   }
 })();
