@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Smart Auto Payment Scheduler 
 // @namespace    Violentmonkey Scripts
-// @version      3.5
-// @description  Automatically adjust payment cycle based on date & earnings; always allows manual override via 1–4 keys (no banners)
+// @version      3.6
+// @description  Automatically adjust payment cycle
 // @match        https://worker.mturk.com/payment_schedule*
 // @grant        none
 // ==/UserScript==
