@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         AB2soft Smart Auto Payment Scheduler (Silent + Auto + Manual)
+// @name         Smart Auto Payment Scheduler 
 // @namespace    Violentmonkey Scripts
-// @version      3.4
+// @version      3.5
 // @description  Automatically adjust payment cycle based on date & earnings; always allows manual override via 1–4 keys (no banners)
 // @match        https://worker.mturk.com/payment_schedule*
 // @grant        none
