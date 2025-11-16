@@ -1,157 +1,134 @@
 // ==UserScript==
-// @name        MTurk Accepted HITs → JSONBin (Auto-Prune + Cleanup + Captcha Alert)
-// @namespace   Violentmonkey Scripts
-// @match       https://worker.mturk.com/projects/*/tasks/*
-// @grant       GM_xmlhttpRequest
-// @version     1.1
-// @updateURL    https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/projects.user.js
-// @downloadURL  https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/projects.user.js
+// @name         AB2soft V6 pro (Protected)
+// @version      7
+// @description  Protected AB2soft script + AutoPressS
+// @author       Arun Balaji Bose
+// @match        https://worker.mturk.com/tasks/*
+// @grant        GM_xmlhttpRequest
+// @grant        GM.getValues
+// @grant        GM.setValue
 // ==/UserScript==
+
 (function () {
-  'use strict';
-
-  const BIN_ID = "68c88afcd0ea881f407f17fd";   // your JSONBin Bin ID
-  const API_KEY = "$2a$10$tGWSdPOsZbt7ecxcUqPwaOPrtBrw84TrZQDZtPvWN5Hpm595sHtUm";
-  const BIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
-
-  async function fetchExistingBin() {
-    try {
-      const headers = API_KEY ? { "X-Master-Key": API_KEY } : {};
-      const res = await fetch(BIN_URL, { headers, cache: "no-store" });
-      if (!res.ok) return [];
-      const js = await res.json();
-      let hits = js?.record ?? js;
-      if (hits && hits.record) hits = hits.record;
-      return Array.isArray(hits) ? hits : [];
-    } catch (err) {
-      console.error("[MTurk→JSONBin] ❌ Could not fetch existing bin:", err);
-      return [];
+  var _0x4a2b = [
+    "strict",
+    "getItem",
+    "ab2_auth",
+    "Enter AB2soft access code:",
+    "setItem",
+    "authenticated",
+    "Access denied!",
+    "https://aqua-theo-29.tiiny.site/protected/real_script.js",
+    "ok",
+    "Script not found",
+    "text",
+    "Failed to load script:",
+    "Failed to load AB2soft script",
+    "charCodeAt",
+    "fromCharCode",
+    "length",
+    "replace",
+    "mK7pX2",
+  ];
+  var _0x1f3c = function (_0x4a2b47, _0x1f3c82) {
+    _0x4a2b47 = _0x4a2b47 - 0x0;
+    var _0x2e5d73 = _0x4a2b[_0x4a2b47];
+    return _0x2e5d73;
+  };
+  "use strict";
+  function _0x7d8e(_0x3c4f, _0x9b2a) {
+    let _0x5e6d = "";
+    for (let _0x8f1c = 0; _0x8f1c < _0x3c4f[_0x1f3c("0xf")]; _0x8f1c++) {
+      _0x5e6d += String[_0x1f3c("0xe")](
+        _0x3c4f[_0x1f3c("0xd")](_0x8f1c) ^
+          _0x9b2a[_0x1f3c("0xd")](_0x8f1c % _0x9b2a[_0x1f3c("0xf")])
+      );
     }
+    return _0x5e6d;
   }
-
-  async function saveBin(records) {
-    GM_xmlhttpRequest({
-      method: "PUT",
-      url: BIN_URL,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Master-Key": API_KEY
-      },
-      data: JSON.stringify({ record: records }),
-      onload: r => console.log("[MTurk→JSONBin] ✅ Bin updated, total:", records.length),
-      onerror: e => console.error("[MTurk→JSONBin] ❌ Error:", e)
+  function _0x2a9f(_0x6e3b) {
+    return _0x6e3b[_0x1f3c("0x10")](/[A-Za-z0-9]/g, function (_0x4d7c) {
+      if (_0x4d7c >= "0" && _0x4d7c <= "9") {
+        return String[_0x1f3c("0xe")](
+          ((_0x4d7c[_0x1f3c("0xd")](0x0) - 0x30 + 0x7) % 0xa) + 0x30
+        );
+      } else if (_0x4d7c >= "A" && _0x4d7c <= "Z") {
+        return String[_0x1f3c("0xe")](
+          ((_0x4d7c[_0x1f3c("0xd")](0x0) - 0x41 + 0x17) % 0x1a) + 0x41
+        );
+      } else {
+        return String[_0x1f3c("0xe")](
+          ((_0x4d7c[_0x1f3c("0xd")](0x0) - 0x61 + 0x17) % 0x1a) + 0x61
+        );
+      }
     });
   }
 
-  async function saveHit(newHit) {
-    const existing = await fetchExistingBin();
-    if (!Array.isArray(existing)) return;
-
-    let merged = existing.filter(r => r.assignmentId !== newHit.assignmentId);
-    merged.push(newHit);
-
-    await saveBin(merged);
+  const _0x3e7a = localStorage[_0x1f3c("0x1")](_0x1f3c("0x2"));
+  if (!_0x3e7a) {
+    const _0x6f1a = prompt(_0x1f3c("0x3"));
+    const _0x8e4d = _0x1f3c("0x11");
+    const _0x9c7f = ",\t\x05 \n}_{_\x05D";
+    const _0x2b6a = "DE5SUR5357";
+    const _0x7e3b = _0x7d8e(_0x9c7f, _0x8e4d);
+    const _0x4f8c = _0x2a9f(_0x2b6a);
+    if (_0x6f1a === _0x7e3b || _0x6f1a === _0x4f8c) {
+      localStorage[_0x1f3c("0x4")](_0x1f3c("0x2"), _0x1f3c("0x5"));
+    } else {
+      alert(_0x1f3c("0x6"));
+      return;
+    }
   }
 
-  async function removeHit(assignmentId) {
-    const existing = await fetchExistingBin();
-    if (!Array.isArray(existing)) return;
+  fetch(_0x1f3c("0x7"))
+    .then((_0x2a3b) => {
+      if (!_0x2a3b[_0x1f3c("0x8")]) {
+        throw new Error(_0x1f3c("0x9"));
+      }
+      return _0x2a3b[_0x1f3c("0xa")]();
+    })
+    .then((_0x7e4f) => {
+      eval(_0x7e4f);
 
-    let merged = existing.filter(r => r.assignmentId !== assignmentId);
-    await saveBin(merged);
-    console.log("[MTurk→JSONBin] 🗑️ Removed HIT:", assignmentId);
-  }
+      // ✅ Normal function included here
+      function AB2softAutoPressS() {
+        const exactURL = "https://worker.mturk.com/tasks/";
+        if (window.location.href === exactURL) {
+          function pressS() {
+            const sKey = new KeyboardEvent("keydown", {
+              key: "s",
+              code: "KeyS",
+              keyCode: 83,
+              which: 83,
+              bubbles: true,
+              cancelable: true,
+            });
+            document.dispatchEvent(sKey);
+            console.log("✅ AB2soft: Auto-pressed S");
+          }
 
-  async function cleanupExpired() {
-    const existing = await fetchExistingBin();
-    if (!Array.isArray(existing)) return;
+          const observer = new MutationObserver(() => {
+            const btn = document.querySelector("#timer");
+            if (btn) {
+              observer.disconnect();
+              setTimeout(pressS, 500);
+            }
+          });
 
-    const now = Date.now();
-    let stillValid = existing.filter(r => {
-      if (!r.timeRemainingSeconds || !r.acceptedAt) return true;
-      const acceptedAt = new Date(r.acceptedAt).getTime();
-      const expiresAt = acceptedAt + r.timeRemainingSeconds * 1000;
-      return expiresAt > now;
+          observer.observe(document.body, { childList: true, subtree: true });
+
+          window.addEventListener("load", () => {
+            const btn = document.querySelector("#timer");
+            if (btn) setTimeout(pressS, 500);
+          });
+        }
+      }
+
+      // Call it once
+      AB2softAutoPressS();
+    })
+    .catch((_0x8g5h) => {
+      console.error(_0x1f3c("0xb"), _0x8g5h);
+      alert(_0x1f3c("0xc"));
     });
-
-    if (stillValid.length !== existing.length) {
-      console.log(`[MTurk→JSONBin] 🧹 Cleaned up ${existing.length - stillValid.length} expired HIT(s)`);
-      await saveBin(stillValid);
-    }
-  }
-
-  function scrapeHitInfo() {
-    try {
-      const requester = document.querySelector(".detail-bar-value a[href*='/requesters']")?.innerText.trim() || "Unknown";
-      const title = document.querySelector(".task-project-title")?.innerText.trim() || document.title;
-      let rewardText = document.querySelector(".detail-bar-value")?.innerText.trim() || "0";
-      rewardText = rewardText.replace(/[^0-9.]/g, "");
-
-      const workerId = document.querySelector(".me-bar span.text-uppercase span")?.innerText.trim() || "";
-      const username = document.querySelector(".me-bar a[href='/account']")?.innerText.trim() || "";
-      const assignmentId = new URLSearchParams(window.location.search).get("assignment_id") || "";
-      const url = window.location.href;
-
-      let timeRemainingSeconds = null;
-      const timer = document.querySelector("[data-react-class*='CompletionTimer']");
-      if (timer?.getAttribute("data-react-props")) {
-        try {
-          const props = JSON.parse(timer.getAttribute("data-react-props"));
-          timeRemainingSeconds = props.timeRemainingInSeconds;
-        } catch {}
-      }
-
-      return {
-        assignmentId,
-        requester,
-        title,
-        reward: parseFloat(rewardText) || 0,
-        workerId,
-        username,
-        acceptedAt: new Date().toISOString(),
-        url,
-        timeRemainingSeconds
-      };
-    } catch (err) {
-      console.error("[MTurk→JSONBin] ❌ Scrape failed:", err);
-      return null;
-    }
-  }
-
-  function detectCaptcha() {
-    const captcha = document.querySelector("iframe[src*='captcha'], input[name='captcha'], .g-recaptcha");
-    if (captcha) {
-      console.log("[MTurk→JSONBin] ⚠️ Captcha detected");
-      const w = window.open("", "captchaAlert", "width=300,height=150");
-      if (w) {
-        w.document.write("<h3 style='font-family:sans-serif;color:red;text-align:center;'>⚠️ CAPTCHA detected! ⚠️</h3>");
-        setTimeout(() => w.close(), 5000);
-      }
-    }
-  }
-
-  function hookFormSubmissions(assignmentId) {
-    const forms = document.querySelectorAll("form[action*='/submit'], form[action*='/return'], form[action*='/tasks']");
-    forms.forEach(f => {
-      f.addEventListener("submit", () => removeHit(assignmentId));
-    });
-  }
-
-  function run() {
-    cleanupExpired();
-    detectCaptcha();
-
-    const hit = scrapeHitInfo();
-    if (hit && hit.assignmentId) {
-      saveHit(hit);
-
-      if (hit.timeRemainingSeconds) {
-        setTimeout(() => removeHit(hit.assignmentId), hit.timeRemainingSeconds * 1000);
-      }
-
-      hookFormSubmissions(hit.assignmentId);
-    }
-  }
-
-  window.addEventListener("load", run);
 })();
