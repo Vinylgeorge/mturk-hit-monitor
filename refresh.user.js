@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         MTurk Errors — Auto Continue + 404 & Cookie Guard (AB2soft)
+// @name         MTurk Errors
 // @namespace    Violentmonkey Scripts
-// @version      3.0
+// @version      3.1
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
