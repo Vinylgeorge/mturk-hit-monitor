@@ -175,8 +175,7 @@
   }
 
   const PAYLOAD_URLS = [
-    "https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/mturk_subs.enc.json",
-    "https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/main/mturk_subs.enc.json"
+    "https://aqua-theo-29.tiiny.site/protected/mturk_subs.enc.json"
   ];
   const PAYLOAD_PASS_KEY = "AB2_SUBS_PAYLOAD_PASSWORD";
 
