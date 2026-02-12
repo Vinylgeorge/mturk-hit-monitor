@@ -3,7 +3,6 @@
 // @namespace    Violentmonkey Scripts
 // @version      1.1
 // @description  Protected loader for mturk_subs.user.js
-// @author       Arun Balaji Bose
 // @match        https://worker.mturk.com/*
 // @match        https://www.mturk.com/*
 // @match        https://*.mturk.com/*
