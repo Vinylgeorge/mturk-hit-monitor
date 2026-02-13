@@ -1,25 +1,58 @@
 // ==UserScript==
-// @name         MTurk Errors
-// @namespace    Violentmonkey Scripts
-// @version      4
+// @name         AB2soft - MTurk Errors Auto Continue + KeepAlive Popup (4+6)
+// @namespace    ab2soft.mturk
+// @version      5
+// @description  Combines: (4) Auto Continue/Captcha handling on /errors pages + (6) periodic popup ping keepalive.
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
+// @match        https://*.mturk.com/errors/*
+// @match        https://*.amazon.com/errors/*
 // @match        https://worker.mturk.com/*
 // @match        https://www.mturk.com/*
-// @match        https://*.mturk.com/errors/*
 // @match        https://*.mturk.com/*
 // @match        https://*.amazon.com/*
 // @grant        none
 // @run-at       document-idle
-// @updateURL    https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/refresh.user.js
-// @downloadURL  https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/refresh.user.js
 // ==/UserScript==
-
-
 
 (function () {
   'use strict';
 
+  /* =========================================================
+     (6) PERIODIC POPUP PING (keep session alive)
+     Runs on worker.mturk.com pages (safe no-op elsewhere)
+  ========================================================= */
+  function scheduleMTurkPopup() {
+    // Only run keepalive on MTurk Worker domain
+    if (!location.hostname.includes("worker.mturk.com")) return;
+
+    const min = 240, max = 300; // seconds
+    const delay = Math.floor(Math.random() * (max - min + 1) + min) * 1000;
+
+    setTimeout(() => {
+      const w = window.open(
+        "https://worker.mturk.com",
+        "mturkPopup",
+        "width=100,height=100,left=50,top=50"
+      );
+
+      if (w) {
+        try { w.blur(); } catch {}
+        try { window.focus(); } catch {}
+        setTimeout(() => { try { w.close(); } catch {} }, 5000);
+      }
+
+      scheduleMTurkPopup();
+    }, delay);
+  }
+
+  // start keepalive
+  scheduleMTurkPopup();
+
+  /* =========================================================
+     (4) FIND & SUBMIT CAPTCHA / CONTINUE FOR ERROR PAGES
+     Runs ONLY when we are on /errors or captcha-like pages
+  ========================================================= */
   const RETRY_INTERVAL_MS = 1200;
   const ATTEMPT_THROTTLE_MS = 8000;
   let lastAttempt = 0;
@@ -66,6 +99,7 @@
         try { el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })); } catch {}
       }
       try { el.click(); } catch {}
+      console.log('[mturk-auto] synthClick dispatched');
       return true;
     } catch (e) {
       console.warn('[mturk-auto] synthClick error', e);
@@ -76,6 +110,7 @@
   async function fetchSubmitForm(form) {
     try {
       if (!form) return false;
+
       const method = (form.getAttribute('method') || 'GET').toUpperCase();
       const action = form.getAttribute('action') || location.pathname;
 
@@ -92,6 +127,7 @@
         const qs = new URLSearchParams(data).toString();
         const full = url + (url.indexOf('?') === -1 ? '?' + qs : '&' + qs);
         const resp = await fetch(full, { method: 'GET', credentials: 'include', cache: 'no-store' });
+        console.log('[mturk-auto] fetchSubmitForm GET status', resp.status);
         return resp.status === 200 || resp.status === 302;
       } else {
         const resp = await fetch(url, {
@@ -100,6 +136,7 @@
           cache: 'no-store',
           body: new URLSearchParams(data)
         });
+        console.log('[mturk-auto] fetchSubmitForm POST status', resp.status);
         return resp.status === 200 || resp.status === 302;
       }
     } catch (e) {
@@ -115,7 +152,12 @@
     const form = findValidateForm();
     const btn = findContinueButton(form);
 
-    if (!form && !btn) return;
+    if (!form && !btn) {
+      console.log('[mturk-auto] no form/button found yet');
+      return;
+    }
+
+    console.log('[mturk-auto] found', { hasForm: !!form, hasButton: !!btn });
 
     if (btn) {
       try { synthClick(btn); } catch (e) { console.warn('[mturk-auto] click error', e); }
@@ -123,13 +165,18 @@
 
     if (form) {
       try {
+        // Try normal submit first
         try {
           form.submit();
+          console.log('[mturk-auto] form.submit() called');
           return;
         } catch (e) {
           console.warn('[mturk-auto] form.submit() error', e);
         }
-        await fetchSubmitForm(form);
+
+        // Fallback: fetch submit
+        const ok = await fetchSubmitForm(form);
+        if (ok) console.log('[mturk-auto] fetchSubmitForm likely succeeded');
       } catch (e) {
         console.warn('[mturk-auto] form handling error', e);
       }
@@ -146,7 +193,17 @@
       console.warn('[mturk-auto] observer failed', e);
     }
 
-    intervalId = setInterval(() => attemptOnce(), RETRY_INTERVAL_MS);
+    intervalId = setInterval(() => {
+      // stop watchers if we left errors page
+      if (!location.pathname.includes('/errors')) {
+        if (intervalId) clearInterval(intervalId);
+        if (observer) try { observer.disconnect(); } catch {}
+        intervalId = null;
+        observer = null;
+        return;
+      }
+      attemptOnce();
+    }, RETRY_INTERVAL_MS);
 
     window.addEventListener('beforeunload', () => {
       if (observer) try { observer.disconnect(); } catch {}
@@ -154,7 +211,13 @@
     });
   }
 
-  if (location.pathname.includes('/errors')) {
+  // Start ONLY on /errors pages or if captcha inputs exist
+  if (
+    location.pathname.includes('/errors') ||
+    document.querySelector('form[action*="/errors/validateCaptcha"], input[name="amzn"], input[name="amzn-r"]')
+  ) {
     setTimeout(startWatching, 300);
   }
+
+  console.log("✅ AB2soft combined script loaded (Auto Continue/Captcha + KeepAlive Popup)");
 })();
