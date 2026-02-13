@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         MTurk Errors
+// @name         MTurk SUBS
 // @namespace    Violentmonkey Scripts
 // @version      3.1
 // @match        https://worker.mturk.com/errors/*
@@ -11,8 +11,8 @@
 // @match        https://*.amazon.com/*
 // @grant        none
 // @run-at       document-idle
-// @updateURL    https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/refresh.user.js
-// @downloadURL  https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/refresh.user.js
+// @updateURL    https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/mturk_subs_loader.user.js
+// @downloadURL  https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/mturk_subs_loader.user.js
 // ==/UserScript==
 
 (function () {
