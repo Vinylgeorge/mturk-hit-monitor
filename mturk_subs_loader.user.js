@@ -1,274 +1,744 @@
 // ==UserScript==
-// @name         MTurk Subs Loader (Protected)
+// @name         MTurk Errors
 // @namespace    Violentmonkey Scripts
-// @version      1.1
-// @description  Protected loader for mturk_subs.user.js
+// @version      3.1
+// @match        https://worker.mturk.com/errors/*
+// @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
 // @match        https://www.mturk.com/*
+// @match        https://*.mturk.com/errors/*
 // @match        https://*.mturk.com/*
-// @grant        GM_xmlhttpRequest
-// @grant        GM.getValue
-// @grant        GM.setValue
-// @connect      raw.githubusercontent.com
-// @connect      github.com
-// @connect      api.github.com
+// @match        https://*.amazon.com/*
+// @grant        none
+// @run-at       document-idle
+// @updateURL    https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/refresh.user.js
+// @downloadURL  https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/refresh.user.js
 // ==/UserScript==
 
-(async function () {
-  "use strict";
+(function () {
+  'use strict';
 
-  async function getWorkerId() {
-    try {
-      const html = document.documentElement.innerHTML;
-      const patterns = [
-        /"workerId"\s*:\s*"([^"]+)"/i,
-        /"worker_id"\s*:\s*"([^"]+)"/i,
-        /workerId=([A-Za-z0-9]+)/i,
-        /worker_id=([A-Za-z0-9]+)/i
-      ];
-      for (const re of patterns) {
-        const m = html.match(re);
-        if (m && m[1]) return m[1];
+  const RETRY_INTERVAL_MS = 1200;
+  const ATTEMPT_THROTTLE_MS = 8000;
+  const CANONICAL_TASKS_URL = "https://worker.mturk.com/tasks/";
+  const TASKS_URL_NO_SLASH = "https://worker.mturk.com/tasks";
+  let lastAttempt = 0;
+  let intervalId = null;
+  let observer = null;
+
+  function now() { return Date.now(); }
+  function setupGlobalCloseWatcher() {
+    const shouldCloseNow = () => {
+      const text = ((document.body && document.body.innerText) || "").toLowerCase();
+      const hasSubmitted = text.includes("hit submitted");
+      const noMoreHits = text.includes("there are no more of these hits available");
+      const seeOtherHits = text.includes("see other hits available to you below");
+      const hitNoLongerAvailable = text.includes("this hit is no longer available");
+      const hitCannotBeReturned = text.includes("this hit cannot be returned");
+      const noLongerInQueue = text.includes("this hit is no longer in your hits queue");
+      if (hasSubmitted || noMoreHits || seeOtherHits || hitNoLongerAvailable || hitCannotBeReturned || noLongerInQueue) return true;
+
+      const alertNodes = Array.from(document.querySelectorAll('div[data-react-class*="alert/Alert"]'));
+      for (const node of alertNodes) {
+        const props = (node.getAttribute("data-react-props") || "").toLowerCase();
+        if (
+          props.includes("hit submitted") ||
+          props.includes("there are no more of these hits available") ||
+          props.includes("see other hits available to you below") ||
+          props.includes("this hit is no longer available") ||
+          props.includes("this hit cannot be returned") ||
+          props.includes("this hit is no longer in your hits queue")
+        ) {
+          return true;
+        }
       }
-    } catch (_) {}
-    return "UNKNOWN_WORKER";
-  }
+      return false;
+    };
 
-  const MASTER_KEY = "AB2soft::SubsLoader::PermanentKey";
+    const tryClose = () => {
+      if (shouldCloseNow()) {
+        console.log("[MTurk AutoClose] Global close watcher detected submit/unavailable alert — closing tab...");
+        try { window.close(); } catch (_) {}
+      }
+    };
 
-  async function encryptToken(plain, workerId) {
-    const enc = new TextEncoder();
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const base = await crypto.subtle.importKey(
-      "raw",
-      enc.encode(MASTER_KEY + "::" + workerId),
-      "PBKDF2",
-      false,
-      ["deriveKey"]
-    );
-    const aesKey = await crypto.subtle.deriveKey(
-      { name: "PBKDF2", salt, iterations: 120000, hash: "SHA-256" },
-      base,
-      { name: "AES-GCM", length: 256 },
-      false,
-      ["encrypt"]
-    );
-    const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, aesKey, enc.encode(plain));
-    const toB64 = bytes => btoa(String.fromCharCode(...bytes));
-    return { s: toB64(salt), i: toB64(iv), c: toB64(new Uint8Array(cipher)) };
-  }
-
-  async function decryptToken(payload, workerId) {
-    const dec = new TextDecoder();
-    const enc = new TextEncoder();
-    const fromB64 = b64 => Uint8Array.from(atob(b64), ch => ch.charCodeAt(0));
-    const base = await crypto.subtle.importKey(
-      "raw",
-      enc.encode(MASTER_KEY + "::" + workerId),
-      "PBKDF2",
-      false,
-      ["deriveKey"]
-    );
-    const aesKey = await crypto.subtle.deriveKey(
-      { name: "PBKDF2", salt: fromB64(payload.s), iterations: 120000, hash: "SHA-256" },
-      base,
-      { name: "AES-GCM", length: 256 },
-      false,
-      ["decrypt"]
-    );
-    const plain = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: fromB64(payload.i) },
-      aesKey,
-      fromB64(payload.c)
-    );
-    return dec.decode(plain);
-  }
-
-  function xorText(text, key) {
-    let out = "";
-    for (let idx = 0; idx < text.length; idx++) {
-      out += String.fromCharCode(text.charCodeAt(idx) ^ key.charCodeAt(idx % key.length));
+    tryClose();
+    const mo = new MutationObserver(tryClose);
+    if (document.documentElement) {
+      mo.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
     }
-    return out;
+    const iv = setInterval(tryClose, 1200);
+    setTimeout(() => {
+      try { mo.disconnect(); } catch (_) {}
+      clearInterval(iv);
+    }, 30000);
+  }
+  setupGlobalCloseWatcher();
+
+  function isExactAllowedUrl() {
+    return location.href === CANONICAL_TASKS_URL;
+  }
+  function normalizeUrl(urlLike) {
+    try {
+      const u = new URL(urlLike, location.origin);
+      let p = u.pathname.replace(/\/{2,}/g, "/");
+      if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1);
+      return `${u.origin}${p}${u.search}`;
+    } catch (_) {
+      return String(urlLike || "");
+    }
+  }
+  function sameNormalizedUrl(a, b) {
+    return normalizeUrl(a) === normalizeUrl(b);
   }
 
-  function rotAlphaNum(input) {
-    return input.replace(/[A-Za-z0-9]/g, ch => {
-      if (ch >= "0" && ch <= "9") return String.fromCharCode((ch.charCodeAt(0) - 48 + 7) % 10 + 48);
-      if (ch >= "A" && ch <= "Z") return String.fromCharCode((ch.charCodeAt(0) - 65 + 23) % 26 + 65);
-      return String.fromCharCode((ch.charCodeAt(0) - 97 + 23) % 26 + 97);
-    });
-  }
+  // ------------------------------------------------
+  // 0) STRICT SINGLE INSTANCE LOCK
+  // ------------------------------------------------
+  function enforceSingleInstance() {
+    const KEY = "AB2_MTURK_SUBS_SINGLE_INSTANCE";
+    const HEARTBEAT_MS = 2500;
+    const STALE_MS = 10000;
+    const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
 
-  async function authorize() {
-    const workerId = await getWorkerId();
-    const authKey = "AB2_SUBS_AUTH::" + workerId;
-    const saved = await GM.getValue(authKey, null);
-    if (saved) {
+    function readState() {
+      try { return JSON.parse(localStorage.getItem(KEY) || "null"); } catch (_) { return null; }
+    }
+    function writeState() {
       try {
-        const value = await decryptToken(saved, workerId);
-        if (value === "OK") return true;
+        localStorage.setItem(KEY, JSON.stringify({
+          id,
+          t: Date.now(),
+          url: normalizeUrl(location.href)
+        }));
       } catch (_) {}
     }
 
-    const input = prompt("Enter AB2soft access code:");
-    if (!input) return false;
-
-    const k = "mK7pX2";
-    const hidden = ",\t\x05 \n}_{_\x05D";
-    const code1 = xorText(hidden, k);
-    const code2 = rotAlphaNum("DE5SUR5357");
-    if (input !== code1 && input !== code2) {
-      alert("Access denied!");
+    const active = readState();
+    if (active && active.id !== id && Date.now() - Number(active.t || 0) < STALE_MS) {
+      console.log("[mturk-auto] another instance is active, skipping this tab");
+      if (location.href === CANONICAL_TASKS_URL) {
+        location.replace(TASKS_URL_NO_SLASH);
+      }
       return false;
     }
 
-    const token = await encryptToken("OK", workerId);
-    await GM.setValue(authKey, token);
+    writeState();
+    const hb = setInterval(() => {
+      const current = readState();
+      if (current && current.id && current.id !== id && Date.now() - Number(current.t || 0) < STALE_MS) {
+        clearInterval(hb);
+        return;
+      }
+      writeState();
+    }, HEARTBEAT_MS);
+
+    window.addEventListener("beforeunload", () => {
+      try {
+        const current = readState();
+        if (current && current.id === id) localStorage.removeItem(KEY);
+      } catch (_) {}
+      clearInterval(hb);
+    });
     return true;
   }
 
-  function requestTextWithRetry(url, maxAttempts = 5) {
-    let attempt = 0;
-    return new Promise((resolve, reject) => {
-      function run() {
-        attempt += 1;
-        GM_xmlhttpRequest({
-          method: "GET",
-          url,
-          nocache: true,
-          timeout: 20000,
-          onload: function (res) {
-            const retryable = res.status === 429 || res.status === 503;
-            if (retryable && attempt < maxAttempts) {
-              const waitMs = Math.min(1500 * Math.pow(2, attempt - 1), 12000) + Math.floor(Math.random() * 300);
-              setTimeout(run, waitMs);
-              return;
-            }
-            if (res.status === 200 && res.responseText) {
-              resolve(res.responseText);
-              return;
-            }
-            reject(new Error("HTTP " + res.status + " at " + url + " (attempt " + attempt + ")"));
-          },
-          onerror: function () {
-            if (attempt < maxAttempts) {
-              const waitMs = Math.min(1500 * Math.pow(2, attempt - 1), 12000) + Math.floor(Math.random() * 300);
-              setTimeout(run, waitMs);
-              return;
-            }
-            reject(new Error("Network error at " + url));
-          },
-          ontimeout: function () {
-            if (attempt < maxAttempts) {
-              const waitMs = Math.min(1500 * Math.pow(2, attempt - 1), 12000) + Math.floor(Math.random() * 300);
-              setTimeout(run, waitMs);
-              return;
-            }
-            reject(new Error("Timed out at " + url));
-          }
-        });
+  if (!isExactAllowedUrl()) return;
+  if (!enforceSingleInstance()) return;
+
+  // ------------------------------------------------
+  // 1) TAB LIMITER (same as your version)
+  // ------------------------------------------------
+  function AB2softTabLimiter() {
+    const MAX_TABS = 3;              // allow any 3 tabs total
+    const STORAGE_KEY = "AB2_TAB_TRACKER";
+    const CHECK_DELAY = 1500;        // wait 1.5 s before enforcing (stabilization)
+    const STALE_AGE = 8000;          // remove tabs not updated in 8 s
+    const tabId = Date.now() + Math.random().toString(16).slice(2);
+
+    const getTabs = () => {
+      try {
+        const all = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+        const now = Date.now();
+        for (const [id, rec] of Object.entries(all)) {
+          if (!rec || now - rec.time > STALE_AGE) delete all[id];
+        }
+        return all;
+      } catch { return {}; }
+    };
+    const saveTabs = (obj) => localStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
+    const cleanup = () => { const t = getTabs(); delete t[tabId]; saveTabs(t); };
+
+    const tabs = getTabs();
+    tabs[tabId] = { url: location.href, time: Date.now() };
+    saveTabs(tabs);
+    window.addEventListener("beforeunload", cleanup);
+
+    setInterval(() => {
+      const t = getTabs();
+      if (t[tabId]) { t[tabId].time = Date.now(); saveTabs(t); }
+    }, 3000);
+
+    setTimeout(() => {
+      const allTabs = Object.keys(getTabs());
+      if (allTabs.length > MAX_TABS) {
+        console.log("AB2soft: closing extra tab →", location.href);
+        try { window.close(); } catch (_) {}
       }
-      run();
+    }, CHECK_DELAY);
+  }
+
+  // run once when script starts
+  AB2softTabLimiter();
+
+  // ------------------------------------------------
+  // 2) AUTO CLOSE “NO MORE HITs AVAILABLE” PAGE
+  // ------------------------------------------------
+  function hasNoMoreHitsSignal() {
+    const bodyText = ((document.body && document.body.innerText) || "").toLowerCase();
+    if (
+      bodyText.includes("there are no more of these hits available") ||
+      bodyText.includes("browse all available hits")
+    ) {
+      return true;
+    }
+
+    const alertNodes = Array.from(document.querySelectorAll('div[data-react-class*="alert/Alert"]'));
+    for (const node of alertNodes) {
+      const txt = (node.textContent || "").toLowerCase();
+      const props = (node.getAttribute("data-react-props") || "").toLowerCase();
+      if (
+        txt.includes("there are no more of these hits available") ||
+        props.includes("there are no more of these hits available") ||
+        props.includes("browse") && props.includes("all available hits")
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function AB2softAutoCloseEmptyHit() {
+    const checkInterval = setInterval(() => {
+      if (hasNoMoreHitsSignal()) {
+        console.log("🚫 No more HITs available — closing tab...");
+        clearInterval(checkInterval);
+        window.close();
+      }
+    }, 1000);
+    setTimeout(() => clearInterval(checkInterval), 20000);
+  }
+  AB2softAutoCloseEmptyHit();
+
+  // ------------------------------------------------
+  // 3) COOKIE GUARD (prevents cookie-too-large loops)
+  // ------------------------------------------------
+  let cookieGuardStarted = false;
+  function AB2softCookieGuard(options = {}) {
+    const isMTurkHost = location.hostname.includes("mturk.com");
+    if (!isMTurkHost) return { removed: 0, reason: "non-mturk-host" };
+
+    const aggressive = !!options.aggressive;
+    const reason = options.reason || "normal-scan";
+
+    const MAX_COOKIE_VALUE = aggressive ? 1200 : 1800;
+    const MAX_COOKIE_HEADER = aggressive ? 5500 : 6800;
+    const MAX_COOKIE_COUNT = aggressive ? 22 : 30;
+    const PROTECTED_PREFIXES = [
+      "session-id",
+      "session-id-time",
+      "session-token",
+      "ubid-",
+      "at-main",
+      "sess-at-",
+      "x-main",
+      "frc",
+      "map-",
+      "sst-",
+      "regstatus",
+      "i18n-prefs",
+      "lc-",
+      "skin"
+    ];
+    const PROTECTED_EXACT_NAMES = new Set([
+      "csm-hit"
+    ]);
+
+    function getBaseDomain() {
+      const parts = location.hostname.split(".");
+      return parts.length >= 2 ? parts.slice(-2).join(".") : location.hostname;
+    }
+
+    function parseCookies() {
+      const raw = document.cookie || "";
+      const pairs = raw ? raw.split(/;\s*/) : [];
+      const out = [];
+      for (const pair of pairs) {
+        if (!pair) continue;
+        const [namePart, ...rest] = pair.split("=");
+        if (!namePart) continue;
+        const name = namePart.trim();
+        const value = rest.join("=");
+        if (!name) continue;
+        out.push({ name, value });
+      }
+      return out;
+    }
+
+    function isProtectedCookie(name) {
+      const lower = name.toLowerCase();
+      if (PROTECTED_EXACT_NAMES.has(lower)) return true;
+      return PROTECTED_PREFIXES.some(prefix => lower.startsWith(prefix));
+    }
+
+    function clearCookieEverywhere(name) {
+      const expires = "Thu, 01 Jan 1970 00:00:00 GMT";
+      const baseDomain = getBaseDomain();
+      const hostname = location.hostname;
+      const paths = ["/", location.pathname || "/"];
+      const domains = [`.${baseDomain}`, hostname, ""];
+      for (const path of paths) {
+        for (const domain of domains) {
+          if (domain) {
+            document.cookie = `${name}=; expires=${expires}; path=${path}; domain=${domain}`;
+          } else {
+            document.cookie = `${name}=; expires=${expires}; path=${path}`;
+          }
+        }
+      }
+    }
+
+    function runSinglePass(forceDropNonEssential = false) {
+      const before = parseCookies();
+      if (!before.length) return { removed: 0, beforeCount: 0, afterCount: 0 };
+      const beforeHeaderBytes = (document.cookie || "").length;
+      let removed = 0;
+
+      // First pass: drop oversized cookies (or all non-essential in aggressive mode)
+      for (const { name, value } of before) {
+        if (isProtectedCookie(name)) continue;
+        if (forceDropNonEssential || value.length > MAX_COOKIE_VALUE) {
+          clearCookieEverywhere(name);
+          removed += 1;
+        }
+      }
+
+      // Second pass: if total header still too large, drop all remaining non-essential.
+      let current = parseCookies();
+      const headerLen = (document.cookie || "").length;
+      if (headerLen > MAX_COOKIE_HEADER || current.length > MAX_COOKIE_COUNT) {
+        for (const { name } of current) {
+          if (isProtectedCookie(name)) continue;
+          clearCookieEverywhere(name);
+          removed += 1;
+        }
+        current = parseCookies();
+      }
+
+      const afterHeaderBytes = (document.cookie || "").length;
+      console.log("[AB2softCookieGuard]", {
+        reason,
+        aggressive,
+        beforeCount: before.length,
+        afterCount: current.length,
+        beforeHeaderBytes,
+        afterHeaderBytes,
+        removed,
+        protectedPrefixes: PROTECTED_PREFIXES.length
+      });
+      return { removed, beforeCount: before.length, afterCount: current.length };
+    }
+
+    const stats = runSinglePass(aggressive);
+    if (aggressive) {
+      // Some cookies can reappear immediately; do one more quick pass.
+      setTimeout(() => runSinglePass(true), 350);
+    }
+
+    if (!cookieGuardStarted) {
+      cookieGuardStarted = true;
+      setInterval(() => AB2softCookieGuard({ reason: "interval-scan" }), 45000);
+      window.addEventListener("focus", () => AB2softCookieGuard({ reason: "window-focus" }));
+      window.addEventListener("pageshow", () => AB2softCookieGuard({ reason: "pageshow" }));
+    }
+
+    return stats;
+  }
+
+  AB2softCookieGuard();
+
+  // ------------------------------------------------
+  // 4) FIND & SUBMIT CAPTCHA / CONTINUE FOR ERROR PAGES
+  // ------------------------------------------------
+  function findValidateForm() {
+    const f1 = document.querySelector('form[action*="/errors/validateCaptcha"]');
+    if (f1) return f1;
+
+    const forms = Array.from(document.querySelectorAll('form'));
+    for (const f of forms) {
+      const hasAmzn = !!f.querySelector('input[name="amzn"], input[name="amzn-r"], input[name="field-keywords"]');
+      if (hasAmzn) return f;
+    }
+    return null;
+  }
+
+  function findContinueButton(form) {
+    const candidates = Array.from(
+      (form ? form.querySelectorAll('button, input[type="submit"], a') :
+        document.querySelectorAll('button, input[type="submit"], a'))
+    );
+    for (const el of candidates) {
+      const text = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().toLowerCase();
+      if (!text) continue;
+      if (text.includes('continue') || text.includes('continue shopping')) return el;
+    }
+    const prim = document.querySelector('.a-button .a-button-text, .a-button-primary .a-button-text, .a-button-inner button');
+    if (prim) return prim;
+    return null;
+  }
+
+  // Optional style from your code (button, not used right now)
+  const style = document.createElement("style");
+  style.textContent = `
+    #mturkQueueBtn {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #2c3e50;
+      color: #fff;
+      font-size: 14px;
+      padding: 8px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      z-index: 99999;
+      box-shadow: 0 3px 8px rgba(0,0,0,0.3);
+      font-family: sans-serif;
+    }
+    #mturkQueueBtn:hover {
+      background: #34495e;
+    }
+  `;
+  document.head.appendChild(style);
+
+  function synthClick(el) {
+    try {
+      el.focus && el.focus();
+      const types = ['mouseover','pointerover','mousemove','mousedown','pointerdown','mouseup','pointerup','click'];
+      for (const t of types) {
+        try {
+          const ev = new MouseEvent(t, { bubbles: true, cancelable: true, view: window });
+          el.dispatchEvent(ev);
+        } catch (e) {}
+      }
+      try { el.click(); } catch (e) {}
+      console.log('[mturk-auto] synthClick dispatched');
+      return true;
+    } catch (e) {
+      console.warn('[mturk-auto] synthClick error', e);
+      return false;
+    }
+  }
+
+  async function fetchSubmitForm(form) {
+    try {
+      if (!form) return false;
+      const method = (form.getAttribute('method') || 'GET').toUpperCase();
+      const action = form.getAttribute('action') || location.pathname;
+
+      const data = {};
+      Array.from(form.querySelectorAll('input[name]')).forEach(i => {
+        const n = i.getAttribute('name');
+        const v = i.value || i.getAttribute('value') || '';
+        if (n) data[n] = v;
+      });
+
+      const url = action.startsWith('http') ? action : (location.origin + action);
+      if (method === 'GET') {
+        const qs = new URLSearchParams(data).toString();
+        const full = url + (url.indexOf('?') === -1 ? '?' + qs : '&' + qs);
+        const resp = await fetch(full, { method: 'GET', credentials: 'include', cache: 'no-store' });
+        const txt = await resp.text();
+        console.log('[mturk-auto] fetchSubmitForm GET status', resp.status);
+        if (/Your HITs Queue/i.test(txt) || resp.status === 302 || resp.status === 200) return true;
+      } else {
+        const resp = await fetch(url, {
+          method: 'POST',
+          credentials: 'include',
+          cache: 'no-store',
+          body: new URLSearchParams(data)
+        });
+        const txt = await resp.text();
+        console.log('[mturk-auto] fetchSubmitForm POST status', resp.status);
+        if (/Your HITs Queue/i.test(txt) || resp.status === 302 || resp.status === 200) return true;
+      }
+    } catch (e) {
+      console.warn('[mturk-auto] fetchSubmitForm error', e);
+    }
+    return false;
+  }
+
+  async function attemptOnce() {
+    if (now() - lastAttempt < ATTEMPT_THROTTLE_MS) return;
+    lastAttempt = now();
+
+    const form = findValidateForm();
+    const btn = findContinueButton(form);
+    if (!form && !btn) {
+      console.log('[mturk-auto] no form/button found yet');
+      return;
+    }
+
+    console.log('[mturk-auto] found', { hasForm: !!form, hasButton: !!btn });
+
+    if (btn) {
+      try {
+        synthClick(btn);
+      } catch (e) { console.warn('[mturk-auto] click error', e); }
+    }
+
+    if (form) {
+      try {
+        try {
+          form.submit();
+          console.log('[mturk-auto] form.submit() called');
+          return;
+        } catch (e) {
+          console.warn('[mturk-auto] form.submit() error', e);
+        }
+
+        const ok = await fetchSubmitForm(form);
+        if (ok) {
+          console.log('[mturk-auto] fetchSubmitForm likely succeeded');
+          return;
+        }
+      } catch (e) {
+        console.warn('[mturk-auto] form handling error', e);
+      }
+    }
+  }
+
+  function startWatching() {
+    attemptOnce();
+
+    try {
+      observer = new MutationObserver(() => {
+        attemptOnce();
+      });
+      observer.observe(document.documentElement || document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true
+      });
+    } catch (e) {
+      console.warn('[mturk-auto] observer failed', e);
+    }
+
+    intervalId = setInterval(() => {
+      if (!location.pathname.includes('/errors')) {
+        clearInterval(intervalId);
+        if (observer) try { observer.disconnect(); } catch (e) {}
+        return;
+      }
+      attemptOnce();
+    }, RETRY_INTERVAL_MS);
+
+    window.addEventListener('beforeunload', () => {
+      if (observer) try { observer.disconnect(); } catch (e) {}
+      if (intervalId) clearInterval(intervalId);
     });
   }
 
-  const PAYLOAD_URLS = [
-    "https://aqua-theo-29.tiiny.site/protected/mturk_subs.enc.json"
-  ];
-  const PAYLOAD_PASS_KEY = "AB2_SUBS_PAYLOAD_PASSWORD";
+  if (
+    location.pathname.includes('/errors') ||
+    document.querySelector('form[action*="/errors/validateCaptcha"], input[name="amzn"], input[name="amzn-r"]')
+  ) {
+    setTimeout(() => startWatching(), 300);
+  }
 
-  async function fetchEncryptedPayload() {
-    const errors = [];
-    for (const url of PAYLOAD_URLS) {
+  // ------------------------------------------------
+  // 5) AUTO FIX 400 / 404 (autoFix404)
+  // ------------------------------------------------
+  function AB2softAutoFix404() {
+    const bodyText = (document.body && document.body.innerText) ? document.body.innerText : "";
+    const lower = bodyText.toLowerCase();
+
+    const isCookieTooLarge =
+      lower.includes("400 bad request") &&
+      lower.includes("request header or cookie too large");
+
+    const looks404 =
+      lower.includes("404") ||
+      lower.includes("page not found") ||
+      lower.includes("looking for something") ||
+      location.pathname.includes("/errors/404");
+
+    const isWorker = location.hostname.includes("mturk.com");
+
+    function redirectToQueueOnce(reason) {
       try {
-        const body = await requestTextWithRetry(url);
-        const trimmed = body.trim();
-        if (!trimmed || trimmed[0] === "<") {
-          throw new Error("URL returned HTML, not JSON: " + url);
+        const key = "AB2_404_FIX_USED";
+        if (sessionStorage.getItem(key) === location.href) {
+          console.log("[AB2softAutoFix404] Already tried fix for this URL, skipping");
+          return;
         }
-        return JSON.parse(trimmed);
-      } catch (e) {
-        errors.push(e && e.message ? e.message : String(e));
+        sessionStorage.setItem(key, location.href);
+      } catch (_) {}
+
+      console.log("[AB2softAutoFix404] Redirecting to queue due to:", reason);
+      if (!sameNormalizedUrl(location.href, CANONICAL_TASKS_URL)) {
+        location.assign(CANONICAL_TASKS_URL);
       }
     }
-    throw new Error(errors.join(" | "));
-  }
 
-  function b64ToBytes(b64) {
-    const raw = atob(b64);
-    const out = new Uint8Array(raw.length);
-    for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
-    return out;
-  }
+    if (!isWorker) return;
 
-  function joinBytes(a, b) {
-    const out = new Uint8Array(a.length + b.length);
-    out.set(a, 0);
-    out.set(b, a.length);
-    return out;
-  }
-
-  async function decryptEncPayload(payload, password) {
-    if (!payload || payload.alg !== "AES-256-GCM" || payload.kdf !== "PBKDF2-SHA256") {
-      throw new Error("Invalid payload format.");
+    if (isCookieTooLarge) {
+      console.log("[AB2softAutoFix404] Detected 400 / cookie too large, running aggressive cookie cleanup...");
+      AB2softCookieGuard({ aggressive: true, reason: "cookie-too-large-400" });
+      setTimeout(() => {
+        redirectToQueueOnce("cookie-too-large");
+      }, 900);
+      return;
     }
-    const iter = Number(payload.iter || 120000);
-    const salt = b64ToBytes(payload.salt);
-    const iv = b64ToBytes(payload.iv);
-    const tag = b64ToBytes(payload.tag);
-    const data = b64ToBytes(payload.data);
-    const cipherWithTag = joinBytes(data, tag);
 
-    const baseKey = await crypto.subtle.importKey(
-      "raw",
-      new TextEncoder().encode(password),
-      "PBKDF2",
-      false,
-      ["deriveKey"]
-    );
-    const aesKey = await crypto.subtle.deriveKey(
-      { name: "PBKDF2", salt, iterations: iter, hash: "SHA-256" },
-      baseKey,
-      { name: "AES-GCM", length: 256 },
-      false,
-      ["decrypt"]
-    );
-    const plainBuf = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv },
-      aesKey,
-      cipherWithTag
-    );
-    return new TextDecoder().decode(plainBuf);
-  }
-
-  async function getPayloadPassword() {
-    const cached = await GM.getValue(PAYLOAD_PASS_KEY, "");
-    if (cached) return cached;
-    const input = prompt("Enter mturk_subs.enc.json password:");
-    if (!input) throw new Error("No decryption password entered.");
-    await GM.setValue(PAYLOAD_PASS_KEY, input);
-    return input;
-  }
-
-  try {
-    const ok = await authorize();
-    if (!ok) return;
-    const payload = await fetchEncryptedPayload();
-    let password = await getPayloadPassword();
-    let sourceCode;
-    try {
-      sourceCode = await decryptEncPayload(payload, password);
-    } catch (_) {
-      await GM.setValue(PAYLOAD_PASS_KEY, "");
-      password = prompt("Wrong password. Re-enter mturk_subs.enc.json password:");
-      if (!password) throw new Error("No decryption password entered.");
-      await GM.setValue(PAYLOAD_PASS_KEY, password);
-      sourceCode = await decryptEncPayload(payload, password);
+    if (looks404) {
+      // Typical worker 404 on project / task pages
+      if (/\/projects\/|\/tasks\/|\/errors\//.test(location.pathname)) {
+        redirectToQueueOnce("mturk-404");
+      }
     }
-    eval(sourceCode);
-  } catch (e) {
-    alert("MTurk Subs Loader error: " + (e && e.message ? e.message : e));
   }
+
+  // Run autoFix404 after DOM is ready a bit
+  setTimeout(AB2softAutoFix404, 1200);
+
+  // ------------------------------------------------
+  // 6) PASSIVE ISSUE DETECTOR (no popup keepalive)
+  // ------------------------------------------------
+  function setupIssueDetector() {
+    if (!location.hostname.includes("mturk.com")) return;
+
+    const reported = new Set();
+    const reportOnce = (key, message) => {
+      if (reported.has(key)) return;
+      reported.add(key);
+      console.warn("[MTurk Detector]", message);
+    };
+
+    function scanIssues() {
+      const bodyText = (document.body && document.body.innerText) ? document.body.innerText.toLowerCase() : "";
+      const form = findValidateForm();
+      const continueBtn = findContinueButton(form);
+      const captchaLike =
+        !!form ||
+        !!document.querySelector('iframe[src*="captcha"], img[src*="captcha"], input[name="amzn"], input[name="amzn-r"]');
+
+      if (captchaLike) {
+        reportOnce("captcha", "Captcha/validation challenge detected.");
+      }
+      if (continueBtn) {
+        reportOnce("continue", "Continue button/action detected.");
+      }
+      if (bodyText.includes("there are no more of these hits available")) {
+        reportOnce("no-more-hits", "No more HITs available page detected.");
+      }
+      if (bodyText.includes("400 bad request") && bodyText.includes("request header or cookie too large")) {
+        reportOnce("cookie-too-large", "400 error: request header or cookie too large.");
+      }
+      if (
+        bodyText.includes("404") ||
+        bodyText.includes("page not found") ||
+        location.pathname.includes("/errors/404")
+      ) {
+        reportOnce("404", "404/page-not-found condition detected.");
+      }
+    }
+
+    scanIssues();
+
+    const issueObserver = new MutationObserver(() => scanIssues());
+    if (document.documentElement) {
+      issueObserver.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        characterData: true
+      });
+    }
+
+    const issueInterval = setInterval(scanIssues, 3000);
+    window.addEventListener("beforeunload", () => {
+      try { issueObserver.disconnect(); } catch (_) {}
+      clearInterval(issueInterval);
+    });
+  }
+  //setupIssueDetector();
+
+  // ------------------------------------------------
+  // 7) BACKGROUND WORKER POPUP PING (every 3-5 min)
+  // ------------------------------------------------
+  function scheduleBackgroundWorkerPing() {
+    if (!location.hostname.includes("mturk.com")) return;
+    const MIN_MS = 180000; // 3 min
+    const MAX_MS = 300000; // 5 min
+    let stopped = false;
+
+    const run = () => {
+      if (stopped) return;
+      const delay = Math.floor(Math.random() * (MAX_MS - MIN_MS + 1)) + MIN_MS;
+      setTimeout(() => {
+        if (stopped) return;
+        try {
+          if (sameNormalizedUrl(location.href, CANONICAL_TASKS_URL)) {
+            run();
+            return;
+          }
+          const w = window.open(
+            CANONICAL_TASKS_URL,
+            "mturkBackgroundPing",
+            "noopener,noreferrer,width=120,height=120,left=0,top=0"
+          );
+          if (w) {
+            try { w.blur(); } catch (_) {}
+            try { window.focus(); } catch (_) {}
+            setTimeout(() => {
+              try { w.close(); } catch (_) {}
+            }, 5000);
+          }
+        } catch (_) {}
+        run();
+      }, delay);
+    };
+
+    run();
+    window.addEventListener("beforeunload", () => {
+      stopped = true;
+    });
+  }
+  //scheduleBackgroundWorkerPing();
+
+  // ------------------------------------------------
+  // 8) AUTO CLOSE TAB WHEN “HIT SUBMITTED” (separate function)
+  // ------------------------------------------------
+  function setupAutoCloseOnSubmit() {
+    function closeIfSubmitted() {
+      const text = (document.body && document.body.innerText) ? document.body.innerText : "";
+      const hasSubmitted = text.includes("HIT Submitted");
+      const noMoreHits = hasNoMoreHitsSignal();
+      const hitNoLongerAvailable = text.includes("This HIT is no longer available");
+      const hitCannotBeReturned = text.includes("This HIT cannot be returned");
+      const noLongerInQueue = text.includes("This HIT is no longer in your HITs queue");
+      if (hasSubmitted || noMoreHits || hitNoLongerAvailable || hitCannotBeReturned || noLongerInQueue) {
+        console.log("[MTurk AutoClose] Submit/No-more-HITs detected — closing tab...");
+        window.close();
+      }
+    }
+
+    const observer = new MutationObserver(closeIfSubmitted);
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    window.addEventListener('load', closeIfSubmitted);
+  }
+  setupAutoCloseOnSubmit();
+
+  console.log("✅ AB2soft MTurk Helper loaded (TabLimiter + CookieGuard + AutoFix404 + AutoClose)");
 })();
