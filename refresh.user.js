@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MTurk Errors
 // @namespace    Violentmonkey Scripts
-// @version      3.1
+// @version      4
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
