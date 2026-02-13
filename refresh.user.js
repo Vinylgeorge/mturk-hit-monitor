@@ -2,7 +2,6 @@
 // @name         AB2soft - MTurk Errors
 // @namespace    ab2soft.mturk
 // @version      5
-// @description  Combines: (4) Auto Continue/Captcha handling on /errors pages + (6) periodic popup ping keepalive.
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://*.mturk.com/errors/*
