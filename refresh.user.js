@@ -1,15 +1,21 @@
 // ==UserScript==
-// @name         AB2soft - MTurk Errors Auto Continue/Captcha
-// @namespace    ab2soft.mturk
-// @version      1.0
-// @description  On /errors pages: tries to click Continue and/or submit validateCaptcha form.
+// @name         MTurk Errors
+// @namespace    Violentmonkey Scripts
+// @version      3.1
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
+// @match        https://worker.mturk.com/*
+// @match        https://www.mturk.com/*
 // @match        https://*.mturk.com/errors/*
-// @match        https://*.amazon.com/errors/*
+// @match        https://*.mturk.com/*
+// @match        https://*.amazon.com/*
 // @grant        none
 // @run-at       document-idle
+// @updateURL    https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/refresh.user.js
+// @downloadURL  https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/refresh.user.js
 // ==/UserScript==
+
+
 
 (function () {
   'use strict';
