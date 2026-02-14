@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft - MTurk Errors
 // @namespace    ab2soft.mturk
-// @version      6
+// @version      7
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://*.mturk.com/errors/*
@@ -10,149 +10,158 @@
 // @match        https://www.mturk.com/*
 // @match        https://*.mturk.com/*
 // @match        https://*.amazon.com/*
+// ==UserScript==
+// @name         AB2soft - MTurk/Amazon Errors AutoContinue (No KeepAlive)
+// @namespace    ab2soft.mturk
+// @version      1.2
+// @description  Auto-continue on Amazon/MTurk Server Busy / captcha error pages.
+// @match        https://worker.mturk.com/*
+// @match        https://worker.mturk.com/errors/*
+// @match        https://*.mturk.com/errors/*
+// @match        https://opfcaptcha.amazon.com/*
+// @match        https://*.amazon.com/errors/*
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
 
-
-(function () {
+((function () {
   'use strict';
 
-  const RETRY_INTERVAL_MS = 1200;
-  const ATTEMPT_THROTTLE_MS = 8000;
+  const RETRY_INTERVAL_MS = 1000;
+  const ATTEMPT_THROTTLE_MS = 4000;
+
   let lastAttempt = 0;
   let intervalId = null;
   let observer = null;
 
   function now() { return Date.now(); }
 
-  function findValidateForm() {
-    const f1 = document.querySelector('form[action*="/errors/validateCaptcha"]');
-    if (f1) return f1;
+  /* --------------------------------------------------
+     Detect error / server busy page
+  -------------------------------------------------- */
+  function isErrorLikePage() {
+    if (location.pathname.includes('/errors')) return true;
 
-    const forms = Array.from(document.querySelectorAll('form'));
-    for (const f of forms) {
-      const hasAmzn = !!f.querySelector('input[name="amzn"], input[name="amzn-r"], input[name="field-keywords"]');
-      if (hasAmzn) return f;
-    }
-    return null;
-  }
+    if (document.querySelector(
+      'form[action*="/errors/validateCaptcha"], input[name="amzn"]'
+    )) return true;
 
-  function findContinueButton(form) {
-    const candidates = Array.from(
-      (form ? form.querySelectorAll('button, input[type="submit"], a')
-            : document.querySelectorAll('button, input[type="submit"], a'))
-    );
-
-    for (const el of candidates) {
-      const text = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().toLowerCase();
-      if (!text) continue;
-      if (text.includes('continue') || text.includes('continue shopping')) return el;
-    }
-
-    const prim = document.querySelector('.a-button .a-button-text, .a-button-primary .a-button-text, .a-button-inner button');
-    if (prim) return prim;
-
-    return null;
-  }
-
-  function synthClick(el) {
-    try {
-      el.focus && el.focus();
-      const types = ['mouseover','pointerover','mousemove','mousedown','pointerdown','mouseup','pointerup','click'];
-      for (const t of types) {
-        try { el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })); } catch {}
-      }
-      try { el.click(); } catch {}
+    const t = (document.body?.innerText || "").toLowerCase();
+    if (t.includes("server busy") && t.includes("continue shopping"))
       return true;
-    } catch (e) {
-      console.warn('[mturk-auto] synthClick error', e);
-      return false;
-    }
+
+    return false;
   }
 
-  async function fetchSubmitForm(form) {
+  /* --------------------------------------------------
+     Build validateCaptcha redirect URL
+  -------------------------------------------------- */
+  function buildValidateUrl(form) {
+    if (!form) return null;
+
+    const action = form.getAttribute('action') || '/errors/validateCaptcha';
+    const url = new URL(action, location.origin);
+
+    const amzn  = form.querySelector('input[name="amzn"]')?.value;
+    const amznr = form.querySelector('input[name="amzn-r"]')?.value;
+    const fk    = form.querySelector('input[name="field-keywords"]')?.value;
+
+    if (!amzn || !amznr) return null;
+
+    url.searchParams.set('amzn', amzn);
+    url.searchParams.set('amzn-r', amznr);
+    if (fk) url.searchParams.set('field-keywords', fk);
+
+    return url.toString();
+  }
+
+  function redirectOnce(url) {
+    const key = "AB2_VALIDATE_LAST";
+
     try {
-      if (!form) return false;
-      const method = (form.getAttribute('method') || 'GET').toUpperCase();
-      const action = form.getAttribute('action') || location.pathname;
+      if (sessionStorage.getItem(key) === url) return false;
+      sessionStorage.setItem(key, url);
+    } catch {}
 
-      const data = {};
-      Array.from(form.querySelectorAll('input[name]')).forEach(i => {
-        const n = i.getAttribute('name');
-        const v = i.value || i.getAttribute('value') || '';
-        if (n) data[n] = v;
-      });
-
-      const url = action.startsWith('http') ? action : (location.origin + action);
-
-      if (method === 'GET') {
-        const qs = new URLSearchParams(data).toString();
-        const full = url + (url.indexOf('?') === -1 ? '?' + qs : '&' + qs);
-        const resp = await fetch(full, { method: 'GET', credentials: 'include', cache: 'no-store' });
-        return resp.status === 200 || resp.status === 302;
-      } else {
-        const resp = await fetch(url, {
-          method: 'POST',
-          credentials: 'include',
-          cache: 'no-store',
-          body: new URLSearchParams(data)
-        });
-        return resp.status === 200 || resp.status === 302;
-      }
-    } catch (e) {
-      console.warn('[mturk-auto] fetchSubmitForm error', e);
-      return false;
-    }
+    console.log("[AB2soft] Redirecting →", url);
+    location.assign(url);
+    return true;
   }
 
-  async function attemptOnce() {
+  function findForm() {
+    return document.querySelector(
+      'form[action*="/errors/validateCaptcha"]'
+    );
+  }
+
+  function findButton() {
+    return document.querySelector(
+      'form[action*="/errors/validateCaptcha"] button[type="submit"]'
+    );
+  }
+
+  /* --------------------------------------------------
+     Main attempt logic
+  -------------------------------------------------- */
+  function attemptOnce() {
+
     if (now() - lastAttempt < ATTEMPT_THROTTLE_MS) return;
     lastAttempt = now();
 
-    const form = findValidateForm();
-    const btn = findContinueButton(form);
+    const form = findForm();
+    const btn  = findButton();
 
     if (!form && !btn) return;
 
-    if (btn) {
-      try { synthClick(btn); } catch (e) { console.warn('[mturk-auto] click error', e); }
-    }
+    // ⭐ BEST METHOD — direct redirect
+    const validateUrl = buildValidateUrl(form);
+    if (validateUrl && redirectOnce(validateUrl)) return;
 
-    if (form) {
-      try {
-        try {
-          form.submit();
-          return;
-        } catch (e) {
-          console.warn('[mturk-auto] form.submit() error', e);
-        }
-        await fetchSubmitForm(form);
-      } catch (e) {
-        console.warn('[mturk-auto] form handling error', e);
+    // fallback submit
+    try {
+      if (btn) {
+        btn.click();
+        console.log("[AB2soft] Button clicked");
+        return;
       }
+
+      if (form) {
+        form.submit();
+        console.log("[AB2soft] Form submitted");
+        return;
+      }
+    } catch (e) {
+      console.log("[AB2soft] fallback failed", e);
     }
   }
 
+  /* --------------------------------------------------
+     Watch DOM changes
+  -------------------------------------------------- */
   function startWatching() {
+
     attemptOnce();
 
-    try {
-      observer = new MutationObserver(() => attemptOnce());
-      observer.observe(document.documentElement || document.body, { childList: true, subtree: true, attributes: true });
-    } catch (e) {
-      console.warn('[mturk-auto] observer failed', e);
-    }
+    observer = new MutationObserver(() => attemptOnce());
 
-    intervalId = setInterval(() => attemptOnce(), RETRY_INTERVAL_MS);
-
-    window.addEventListener('beforeunload', () => {
-      if (observer) try { observer.disconnect(); } catch {}
-      if (intervalId) clearInterval(intervalId);
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true
     });
+
+    intervalId = setInterval(() => {
+      if (!isErrorLikePage()) {
+        clearInterval(intervalId);
+        observer.disconnect();
+        return;
+      }
+      attemptOnce();
+    }, RETRY_INTERVAL_MS);
   }
 
-  if (location.pathname.includes('/errors')) {
-    setTimeout(startWatching, 300);
+  if (isErrorLikePage()) {
+    setTimeout(startWatching, 200);
   }
+
+  console.log("✅ AB2soft AutoContinue loaded (No KeepAlive)");
 })();
