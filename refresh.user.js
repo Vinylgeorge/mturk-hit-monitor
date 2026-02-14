@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft - MTurk Errors
 // @namespace    ab2soft.mturk
-// @version      7
+// @version      9
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://*.mturk.com/errors/*
