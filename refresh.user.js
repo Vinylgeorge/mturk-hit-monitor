@@ -1,17 +1,19 @@
 // ==UserScript==
-// @name         AB2soft - MTurk Errors
-// @namespace    ab2soft.mturk
-// @version      10
+// @name         AB2soft - MTurkErrors
+// @version      11
+// @description  Auto-continue on Amazon/MTurk error pages (direct redirect using hidden fields) + periodic keepalive popup.
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://*.mturk.com/errors/*
 // @match        https://*.amazon.com/errors/*
+// @match        https://opfcaptcha.amazon.com/*
 // @match        https://worker.mturk.com/*
 // @match        https://www.mturk.com/*
 // @match        https://*.mturk.com/*
-// @match        https://opfcaptcha.amazon.com/*
 // @match        https://*.amazon.com/*
-// ==UserScript==
+// @grant        none
+// @run-at       document-idle
+// ==/UserScript==
 
 
 
@@ -154,5 +156,5 @@
     setTimeout(startWatching, 200);
   }
 
-  console.log("✅ AB2soft AutoContinue loaded (No KeepAlive)")=
+  console.log("✅ AB2soft AutoContinue loaded (No KeepAlive)");
 })();
