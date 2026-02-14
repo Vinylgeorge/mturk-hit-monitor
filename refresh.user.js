@@ -40,7 +40,7 @@
             : document.querySelectorAll('button, input[type="submit"], a'))
     );
 
-    for (const el of candidates) {
+       for (const el of candidates) {
       const text = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().toLowerCase();
       if (!text) continue;
       if (text.includes('continue') || text.includes('continue shopping')) return el;
