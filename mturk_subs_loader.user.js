@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         MTurk SUBS (AB2soft - Skip ONLY /tasks/ + Max3 Others + Dedupe + AutoFix)
+// @name         MTurk SUBS 
 // @namespace    Violentmonkey Scripts
-// @version      3.6
+// @version      3.7
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -58,7 +58,7 @@
     function writeTracker(m) { try { localStorage.setItem(TRACK_KEY, JSON.stringify(m)); } catch (_) {} }
     function isAlive(t) { return (now() - Number(t || 0)) < STALE_MS; }
 
-    function cleanupStale(tr) {
+     function cleanupStale(tr) {
       const out = tr || {};
       const t = now();
       for (const [id, rec] of Object.entries(out)) {
