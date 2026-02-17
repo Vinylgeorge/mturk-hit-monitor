@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         MTurk SUBS (AB2soft - tasks/ protected + Max3 + Close Expired + Idle 1min)
+// @name         MTurk SUBS 
 // @namespace    Violentmonkey Scripts
-// @version      3.9
+// @version      3.11
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -19,7 +19,7 @@
   'use strict';
 
   /* =========================================================
-     YOUR RULES (final):
+      YOUR RULES (final):
      1) MAIN working tab = EXACT https://worker.mturk.com/tasks/
         - NOTHING should work there (no closers, no cookie guard, nothing)
         - also: do NOT kill it
