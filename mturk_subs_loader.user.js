@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         MTurk SUBS
+// @name         MTurk SUBS (AB2soft - tasks/ protected + Max3 + Close Expired + Idle 1min)
 // @namespace    Violentmonkey Scripts
-// @version      3.8
+// @version      3.9
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -19,25 +19,27 @@
   'use strict';
 
   /* =========================================================
-     RULES (as you said):
-     1) NOTHING should work on MAIN tasks/ page (EXACT trailing slash)
-        - tasks (no slash) is treated like normal page (all logics run)
-     2) GLOBAL max 3 tabs total (ALL pages counted, including tasks/)
-        - extra tabs close silently (window.close -> about:blank fallback)
-     ========================================================= */
+     YOUR RULES (final):
+     1) MAIN working tab = EXACT https://worker.mturk.com/tasks/
+        - NOTHING should work there (no closers, no cookie guard, nothing)
+        - also: do NOT kill it
+     2) All OTHER tabs:
+        - Global MAX 3 tabs total (tasks/ included in counting, but never killed)
+        - Extra tabs close silently
+        - If HIT is expired/unavailable -> close that tab
+        - If tab is IDLE for 1 minute -> close that tab
+  ========================================================= */
 
   const TASKS_SLASH = "https://worker.mturk.com/tasks/";
-  const isTasksSlash = (location.href === TASKS_SLASH);
+  const isMainTasks = (location.href === TASKS_SLASH);
 
-  /* =========================================================
-     0) GLOBAL MAX 3 TABS (counts EVERYTHING, including tasks/)
-        - tasks/ tab is NEVER closed by limiter (protected)
-        - if over max, the NEW tab closes itself (unless it's tasks/)
-  ========================================================= */
+  // ---------------------------------------------------------
+  // 0) GLOBAL TAB REGISTRY (used for Max3 + stale cleanup)
+  // ---------------------------------------------------------
   const MAX_TABS = 3;
-  const TRACK_KEY = "AB2_GLOBAL_MAX3_TABS_V2";
+  const TRACK_KEY = "AB2_GLOBAL_TABS_V3";
   const HEARTBEAT_MS = 2000;
-  const STALE_MS = 10000;
+  const STALE_MS = 12000;
 
   const tabId = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
 
@@ -56,7 +58,7 @@
   }
 
   function silentClose(reason) {
-    // silent close/disarm without disturbing current window
+    // close without disturbing current window; fallback to about:blank if blocked
     let tries = 0;
     const iv = setInterval(() => {
       tries++;
@@ -68,26 +70,26 @@
     }, 200);
   }
 
-  // Register this tab
+  // Register THIS tab (including tasks/)
   let tr = cleanupStale(readTracker());
-  tr[tabId] = { url: location.href, t: now(), tasksSlash: isTasksSlash ? 1 : 0 };
+  tr[tabId] = { url: location.href, t: now(), isTasksSlash: isMainTasks ? 1 : 0 };
   writeTracker(tr);
 
-  // Enforce MAX_TABS (only non-tasks/ tabs can be killed)
+  // Enforce max tabs: if >3, close ONLY non-main tabs
   tr = cleanupStale(readTracker());
   const count = Object.keys(tr).length;
-  if (count > MAX_TABS && !isTasksSlash) {
+  if (count > MAX_TABS && !isMainTasks) {
     silentClose(`max-tabs-exceeded count=${count} max=${MAX_TABS}`);
-    return; // stop everything else in this extra tab
+    return;
   }
 
-  // Heartbeat + cleanup
+  // Heartbeat
   const hb = setInterval(() => {
     let t2 = cleanupStale(readTracker());
-    if (!t2[tabId]) t2[tabId] = { url: location.href, t: now(), tasksSlash: isTasksSlash ? 1 : 0 };
+    if (!t2[tabId]) t2[tabId] = { url: location.href, t: now(), isTasksSlash: isMainTasks ? 1 : 0 };
     t2[tabId].t = now();
     t2[tabId].url = location.href;
-    t2[tabId].tasksSlash = isTasksSlash ? 1 : 0;
+    t2[tabId].isTasksSlash = isMainTasks ? 1 : 0;
     writeTracker(t2);
   }, HEARTBEAT_MS);
 
@@ -100,20 +102,98 @@
     } catch (_) {}
   });
 
-  /* =========================================================
-     ✅ NOTHING should work on tasks/ (EXACT)
-     - we already counted it for max tabs
-     - NOW we stop here: no other logic runs on tasks/
-  ========================================================= */
-  if (isTasksSlash) return;
+  // ✅ Nothing should run on main tasks/ tab
+  if (isMainTasks) return;
 
   /* =========================================================
-     Everything below runs on ALL OTHER PAGES (including tasks w/o slash)
+     1) IDLE CLOSE (1 minute) for non-main tabs
+     - "Idle" = no user interaction (mouse/keyboard/scroll/touch)
+     - after 60s idle -> close silently
+  ========================================================= */
+  const IDLE_MS = 60000;
+  let lastActive = now();
+
+  function markActive() { lastActive = now(); }
+
+  ["mousemove","mousedown","keydown","scroll","touchstart","wheel","pointerdown"].forEach(evt => {
+    window.addEventListener(evt, markActive, { passive: true, capture: true });
+  });
+  window.addEventListener("focus", markActive);
+  window.addEventListener("visibilitychange", () => { if (!document.hidden) markActive(); });
+
+  setInterval(() => {
+    if (now() - lastActive > IDLE_MS) {
+      silentClose("idle>60s");
+    }
+  }, 5000);
+
+  /* =========================================================
+     2) CLOSE IF HIT EXPIRED / UNAVAILABLE / OUT OF QUEUE
+     - includes your previous phrases + stronger expired wording
+  ========================================================= */
+  function shouldCloseExpired() {
+    const text = ((document.body && document.body.innerText) || "").toLowerCase();
+
+    const phrases = [
+      "hit submitted",
+      "there are no more of these hits available",
+      "see other hits available to you below",
+      "this hit is no longer available",
+      "this hit cannot be returned",
+      "this hit is no longer in your hits queue",
+      "expired",                          // catch generic “expired”
+      "this hit has expired",             // common wording
+      "you have exceeded",                // sometimes appears with blocks/errors
+      "no longer available to you"
+    ];
+
+    for (const p of phrases) {
+      if (text.includes(p)) return true;
+    }
+
+    // react alert props check
+    const alertNodes = Array.from(document.querySelectorAll('div[data-react-class*="alert/Alert"]'));
+    for (const node of alertNodes) {
+      const props = (node.getAttribute("data-react-props") || "").toLowerCase();
+      for (const p of phrases) {
+        if (props.includes(p)) return true;
+      }
+    }
+    return false;
+  }
+
+  function setupCloseExpiredWatcher() {
+    const tryClose = () => {
+      if (shouldCloseExpired()) {
+        silentClose("expired/unavailable/submitted");
+      }
+    };
+
+    tryClose();
+    const mo = new MutationObserver(tryClose);
+    try {
+      mo.observe(document.documentElement || document.body, { childList: true, subtree: true, characterData: true });
+    } catch (_) {}
+
+    const iv = setInterval(tryClose, 1200);
+
+    // keep watcher up to 2 minutes
+    setTimeout(() => {
+      try { mo.disconnect(); } catch (_) {}
+      try { clearInterval(iv); } catch (_) {}
+    }, 120000);
+  }
+  setupCloseExpiredWatcher();
+
+  /* =========================================================
+     3) KEEP YOUR OTHER LOGICS "AS USUAL" (unchanged behavior)
+     - CookieGuard
+     - Captcha validate auto-continue (only /errors)
+     - AutoFix 400/404 redirect to tasks/
   ========================================================= */
 
   const RETRY_INTERVAL_MS = 1200;
   const ATTEMPT_THROTTLE_MS = 8000;
-
   let lastAttempt = 0;
   let intervalId = null;
   let observer = null;
@@ -132,97 +212,15 @@
     return normalizeUrl(a) === normalizeUrl(b);
   }
 
-  // ------------------------------------------------
-  // 1) Global close watcher (submit/unavailable)
-  // ------------------------------------------------
-  function setupGlobalCloseWatcher() {
-    const shouldCloseNow = () => {
-      const text = ((document.body && document.body.innerText) || "").toLowerCase();
-      const hasSubmitted = text.includes("hit submitted");
-      const noMoreHits = text.includes("there are no more of these hits available");
-      const seeOtherHits = text.includes("see other hits available to you below");
-      const hitNoLongerAvailable = text.includes("this hit is no longer available");
-      const hitCannotBeReturned = text.includes("this hit cannot be returned");
-      const noLongerInQueue = text.includes("this hit is no longer in your hits queue");
-      if (hasSubmitted || noMoreHits || seeOtherHits || hitNoLongerAvailable || hitCannotBeReturned || noLongerInQueue) return true;
-
-      const alertNodes = Array.from(document.querySelectorAll('div[data-react-class*="alert/Alert"]'));
-      for (const node of alertNodes) {
-        const props = (node.getAttribute("data-react-props") || "").toLowerCase();
-        if (
-          props.includes("hit submitted") ||
-          props.includes("there are no more of these hits available") ||
-          props.includes("see other hits available to you below") ||
-          props.includes("this hit is no longer available") ||
-          props.includes("this hit cannot be returned") ||
-          props.includes("this hit is no longer in your hits queue")
-        ) return true;
-      }
-      return false;
-    };
-
-    const tryClose = () => {
-      if (shouldCloseNow()) {
-        try { window.close(); } catch (_) {}
-        setTimeout(() => { try { location.replace("about:blank"); } catch (_) {} }, 400);
-      }
-    };
-
-    tryClose();
-    const mo = new MutationObserver(tryClose);
-    if (document.documentElement) mo.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
-    const iv = setInterval(tryClose, 1200);
-
-    setTimeout(() => {
-      try { mo.disconnect(); } catch (_) {}
-      clearInterval(iv);
-    }, 30000);
-  }
-  setupGlobalCloseWatcher();
-
-  // ------------------------------------------------
-  // 2) Auto close “No more HITs available” page
-  // ------------------------------------------------
-  function hasNoMoreHitsSignal() {
-    const bodyText = ((document.body && document.body.innerText) || "").toLowerCase();
-    if (bodyText.includes("there are no more of these hits available") || bodyText.includes("browse all available hits")) return true;
-
-    const alertNodes = Array.from(document.querySelectorAll('div[data-react-class*="alert/Alert"]'));
-    for (const node of alertNodes) {
-      const txt = (node.textContent || "").toLowerCase();
-      const props = (node.getAttribute("data-react-props") || "").toLowerCase();
-      if (
-        txt.includes("there are no more of these hits available") ||
-        props.includes("there are no more of these hits available") ||
-        (props.includes("browse") && props.includes("all available hits"))
-      ) return true;
-    }
-    return false;
-  }
-
-  function AB2softAutoCloseEmptyHit() {
-    const checkInterval = setInterval(() => {
-      if (hasNoMoreHitsSignal()) {
-        clearInterval(checkInterval);
-        try { window.close(); } catch (_) {}
-        setTimeout(() => { try { location.replace("about:blank"); } catch (_) {} }, 400);
-      }
-    }, 1000);
-    setTimeout(() => clearInterval(checkInterval), 20000);
-  }
-  AB2softAutoCloseEmptyHit();
-
-  // ------------------------------------------------
-  // 3) Cookie Guard
-  // ------------------------------------------------
+  // --------------------------
+  // Cookie guard
+  // --------------------------
   let cookieGuardStarted = false;
   function AB2softCookieGuard(options = {}) {
     const isMTurkHost = location.hostname.includes("mturk.com");
     if (!isMTurkHost) return { removed: 0, reason: "non-mturk-host" };
 
     const aggressive = !!options.aggressive;
-    const reason = options.reason || "normal-scan";
-
     const MAX_COOKIE_VALUE = aggressive ? 1200 : 1800;
     const MAX_COOKIE_HEADER = aggressive ? 5500 : 6800;
     const MAX_COOKIE_COUNT = aggressive ? 22 : 30;
@@ -277,7 +275,6 @@
     function runSinglePass(forceDropNonEssential = false) {
       const before = parseCookies();
       if (!before.length) return { removed: 0, beforeCount: 0, afterCount: 0 };
-
       let removed = 0;
 
       for (const { name, value } of before) {
@@ -311,14 +308,13 @@
       window.addEventListener("focus", () => AB2softCookieGuard({ reason: "window-focus" }));
       window.addEventListener("pageshow", () => AB2softCookieGuard({ reason: "pageshow" }));
     }
-
     return stats;
   }
   AB2softCookieGuard();
 
-  // ------------------------------------------------
-  // 4) Captcha / error auto-continue (only on errors/captcha pages)
-  // ------------------------------------------------
+  // --------------------------
+  // Captcha/errors auto continue (only /errors)
+  // --------------------------
   function findValidateForm() {
     const f1 = document.querySelector('form[action*="/errors/validateCaptcha"]');
     if (f1) return f1;
@@ -397,10 +393,7 @@
     const btn = findContinueButton(form);
     if (!form && !btn) return;
 
-    if (btn) {
-      try { synthClick(btn); } catch (_) {}
-    }
-
+    if (btn) { try { synthClick(btn); } catch (_) {} }
     if (form) {
       try {
         try { form.submit(); return; } catch (_) {}
@@ -411,7 +404,6 @@
 
   function startWatching() {
     attemptOnce();
-
     try {
       observer = new MutationObserver(() => { attemptOnce(); });
       observer.observe(document.documentElement || document.body, {
@@ -443,9 +435,9 @@
     setTimeout(() => startWatching(), 300);
   }
 
-  // ------------------------------------------------
-  // 5) AutoFix 400/404 -> redirect to tasks/
-  // ------------------------------------------------
+  // --------------------------
+  // AutoFix 400/404 -> redirect to tasks/
+  // --------------------------
   function AB2softAutoFix404() {
     const bodyText = (document.body && document.body.innerText) ? document.body.innerText : "";
     const lower = bodyText.toLowerCase();
@@ -462,7 +454,7 @@
 
     const isWorker = location.hostname.includes("mturk.com");
 
-    function redirectToQueueOnce(reason) {
+    function redirectToQueueOnce() {
       try {
         const key = "AB2_404_FIX_USED";
         if (sessionStorage.getItem(key) === location.href) return;
@@ -478,40 +470,17 @@
 
     if (isCookieTooLarge) {
       AB2softCookieGuard({ aggressive: true, reason: "cookie-too-large-400" });
-      setTimeout(() => redirectToQueueOnce("cookie-too-large"), 900);
+      setTimeout(() => redirectToQueueOnce(), 900);
       return;
     }
 
     if (looks404) {
       if (/\/projects\/|\/tasks\/|\/errors\//.test(location.pathname)) {
-        redirectToQueueOnce("mturk-404");
+        redirectToQueueOnce();
       }
     }
   }
   setTimeout(AB2softAutoFix404, 1200);
 
-  // ------------------------------------------------
-  // 6) Auto close on submit (extra)
-  // ------------------------------------------------
-  function setupAutoCloseOnSubmit() {
-    function closeIfSubmitted() {
-      const text = (document.body && document.body.innerText) ? document.body.innerText : "";
-      const hasSubmitted = text.includes("HIT Submitted");
-      const noMoreHits = hasNoMoreHitsSignal();
-      const hitNoLongerAvailable = text.includes("This HIT is no longer available");
-      const hitCannotBeReturned = text.includes("This HIT cannot be returned");
-      const noLongerInQueue = text.includes("This HIT is no longer in your HITs queue");
-      if (hasSubmitted || noMoreHits || hitNoLongerAvailable || hitCannotBeReturned || noLongerInQueue) {
-        try { window.close(); } catch (_) {}
-        setTimeout(() => { try { location.replace("about:blank"); } catch (_) {} }, 400);
-      }
-    }
-
-    const ob = new MutationObserver(closeIfSubmitted);
-    if (document.body) ob.observe(document.body, { childList: true, subtree: true });
-    window.addEventListener('load', closeIfSubmitted);
-  }
-  setupAutoCloseOnSubmit();
-
-  console.log("✅ AB2soft MTurk SUBS loaded (max 3 tabs + NO logic on tasks/)");
+  console.log("✅ AB2soft MTurk SUBS loaded (tasks/ protected | Max3 | expired close | idle 1min close)");
 })();
