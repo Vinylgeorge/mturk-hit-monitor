@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         MTurk SUBS
+// @name         MTurk SUBS (AB2soft - Skip ONLY /tasks/ + Max3 Others + Dedupe + AutoFix)
 // @namespace    Violentmonkey Scripts
-// @version      3.1
+// @version      3.6
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -18,15 +18,192 @@
 (function () {
   'use strict';
 
+  /* =========================================================
+     ✅ IMPORTANT RULE YOU SAID:
+     - tasks/ and tasks are DIFFERENT
+     - NOTHING should work ONLY on EXACT tasks/ (with trailing slash)
+     - tasks (no slash) should behave like other pages (all logics run)
+     - NEVER kill tasks/ tab (we don't run there at all)
+  ========================================================= */
+  const TASKS_SLASH = "https://worker.mturk.com/tasks/";
+  const TASKS_NOSLASH = "https://worker.mturk.com/tasks"; // treated like other pages
+  if (location.href === TASKS_SLASH) return;
+
   const RETRY_INTERVAL_MS = 1200;
   const ATTEMPT_THROTTLE_MS = 8000;
-  const CANONICAL_TASKS_URL = "https://worker.mturk.com/tasks/";
-  const TASKS_URL_NO_SLASH = "https://worker.mturk.com/tasks";
+
   let lastAttempt = 0;
   let intervalId = null;
   let observer = null;
 
   function now() { return Date.now(); }
+
+  /* =========================================================
+     0) GLOBAL MAX 3 "OTHER" TABS (everything except tasks/)
+        + CLOSE DUPLICATE SAME REQUESTER/PROJECT
+     - tasks/ is excluded because script doesn't run there.
+     - tasks (no slash) IS INCLUDED in counting and logic.
+  ========================================================= */
+  (function AB2softTabControl() {
+    const MAX_TABS = 3;                              // ✅ max tabs total (excluding tasks/ only)
+    const TRACK_KEY = "AB2_TAB_TRACKER_V2";          // global registry for this script
+    const OWNER_PREFIX = "AB2_OWNER_SIG:";           // per requester/project owner lock
+    const HEARTBEAT_MS = 2000;
+    const STALE_MS = 9000;
+
+    const tabId = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+    function safeJSONParse(s) { try { return JSON.parse(s); } catch (_) { return null; } }
+    function readTracker() { return safeJSONParse(localStorage.getItem(TRACK_KEY) || "{}") || {}; }
+    function writeTracker(m) { try { localStorage.setItem(TRACK_KEY, JSON.stringify(m)); } catch (_) {} }
+    function isAlive(t) { return (now() - Number(t || 0)) < STALE_MS; }
+
+    function cleanupStale(tr) {
+      const out = tr || {};
+      const t = now();
+      for (const [id, rec] of Object.entries(out)) {
+        if (!rec || !rec.t || (t - rec.t > STALE_MS)) delete out[id];
+      }
+      return out;
+    }
+
+    function quietClose(reason) {
+      console.log("[AB2soft] close/disarm:", reason, location.href);
+      let tries = 0;
+      const iv = setInterval(() => {
+        tries++;
+        try { window.close(); } catch (_) {}
+        if (tries >= 6) {
+          clearInterval(iv);
+          try { location.replace("about:blank"); } catch (_) {}
+        }
+      }, 200);
+    }
+
+    // ----- signature detection for "same requester/project"
+    function signatureFromUrl() {
+      try {
+        const u = new URL(location.href);
+
+        // /projects/<PROJECT_ID>/...
+        const pm = u.pathname.match(/\/projects\/([^/]+)/i);
+        if (pm && pm[1]) return `project:${pm[1]}`;
+
+        // requesterId in params
+        const sp = u.searchParams;
+        const rid =
+          sp.get("requesterId") || sp.get("requester_id") || sp.get("reqId") ||
+          sp.get("requester");
+        if (rid) return `requester:${rid}`;
+
+        // requesterId pattern anywhere in URL
+        const rm = u.href.match(/A[0-9A-Z]{12,15}/);
+        if (rm && rm[0]) return `requester:${rm[0]}`;
+
+        return null;
+      } catch (_) { return null; }
+    }
+
+    function signatureFromDom() {
+      try {
+        const a = document.querySelector('a[href*="/projects/"]');
+        if (a) {
+          const href = a.getAttribute("href") || "";
+          const m = href.match(/\/projects\/([^/]+)/i);
+          if (m && m[1]) return `project:${m[1]}`;
+        }
+
+        const nodes = Array.from(document.querySelectorAll("[data-react-props]"));
+        for (const n of nodes) {
+          const p = (n.getAttribute("data-react-props") || "");
+          if (p.length < 10) continue;
+
+          const pm = p.match(/\/projects\/([^/"]+)/i);
+          if (pm && pm[1]) return `project:${pm[1]}`;
+
+          const rm = p.match(/requester(?:Id|_id)"\s*:\s*"([^"]+)"/i);
+          if (rm && rm[1]) return `requester:${rm[1]}`;
+        }
+
+        const body = (document.body && document.body.innerText) ? document.body.innerText : "";
+        const m2 = body.match(/A[0-9A-Z]{12,15}/);
+        if (m2 && m2[0]) return `requester:${m2[0]}`;
+
+        return null;
+      } catch (_) { return null; }
+    }
+
+    // 1) Register this tab (counts tasks (no slash) too)
+    let tr = cleanupStale(readTracker());
+    tr[tabId] = { url: location.href, t: now() };
+    writeTracker(tr);
+
+    // 2) Enforce MAX_TABS: newest tab closes itself
+    tr = cleanupStale(readTracker());
+    const count = Object.keys(tr).length;
+    if (count > MAX_TABS) {
+      quietClose(`max-tabs-exceeded count=${count} max=${MAX_TABS}`);
+      return;
+    }
+
+    // 3) Dedupe same requester/project: newest tab closes itself
+    function tryDedupe() {
+      const sig = signatureFromUrl() || signatureFromDom();
+      if (!sig) return false;
+
+      const ownerKey = OWNER_PREFIX + sig;
+      const curOwner = safeJSONParse(localStorage.getItem(ownerKey) || "null");
+      if (curOwner && curOwner.id && curOwner.id !== tabId && isAlive(curOwner.t)) {
+        quietClose(`duplicate-same-sig sig=${sig} owner=${curOwner.id}`);
+        return true;
+      }
+
+      // claim ownership
+      try { localStorage.setItem(ownerKey, JSON.stringify({ id: tabId, t: now(), url: location.href })); } catch (_) {}
+      return true;
+    }
+
+    tryDedupe();
+    const start = now();
+    const sigIv = setInterval(() => {
+      if (tryDedupe()) { clearInterval(sigIv); return; }
+      if (now() - start > 2500) clearInterval(sigIv);
+    }, 200);
+
+    // 4) Heartbeat + cleanup
+    const hb = setInterval(() => {
+      let t2 = cleanupStale(readTracker());
+      if (!t2[tabId]) t2[tabId] = { url: location.href, t: now() };
+      t2[tabId].t = now();
+      t2[tabId].url = location.href;
+      writeTracker(t2);
+
+      // refresh owner only if we can quickly detect a sig from URL
+      const sig = signatureFromUrl();
+      if (sig) {
+        const ownerKey = OWNER_PREFIX + sig;
+        const cur = safeJSONParse(localStorage.getItem(ownerKey) || "null");
+        if (cur && cur.id === tabId) {
+          try { localStorage.setItem(ownerKey, JSON.stringify({ id: tabId, t: now(), url: location.href })); } catch (_) {}
+        }
+      }
+    }, HEARTBEAT_MS);
+
+    window.addEventListener("beforeunload", () => {
+      try { clearInterval(hb); } catch (_) {}
+      try { clearInterval(sigIv); } catch (_) {}
+
+      try {
+        let t3 = cleanupStale(readTracker());
+        delete t3[tabId];
+        writeTracker(t3);
+      } catch (_) {}
+    });
+  })();
+
+  /* =========================================================
+     1) GLOBAL CLOSE WATCHER (submit/unavailable signals)
+  ========================================================= */
   function setupGlobalCloseWatcher() {
     const shouldCloseNow = () => {
       const text = ((document.body && document.body.innerText) || "").toLowerCase();
@@ -48,26 +225,24 @@
           props.includes("this hit is no longer available") ||
           props.includes("this hit cannot be returned") ||
           props.includes("this hit is no longer in your hits queue")
-        ) {
-          return true;
-        }
+        ) return true;
       }
       return false;
     };
 
     const tryClose = () => {
       if (shouldCloseNow()) {
-        console.log("[MTurk AutoClose] Global close watcher detected submit/unavailable alert — closing tab...");
+        console.log("[MTurk AutoClose] detected submit/unavailable - closing tab...");
         try { window.close(); } catch (_) {}
+        setTimeout(() => { try { location.replace("about:blank"); } catch (_) {} }, 400);
       }
     };
 
     tryClose();
     const mo = new MutationObserver(tryClose);
-    if (document.documentElement) {
-      mo.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
-    }
+    if (document.documentElement) mo.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
     const iv = setInterval(tryClose, 1200);
+
     setTimeout(() => {
       try { mo.disconnect(); } catch (_) {}
       clearInterval(iv);
@@ -75,133 +250,12 @@
   }
   setupGlobalCloseWatcher();
 
-  function isExactAllowedUrl() {
-    return location.href === CANONICAL_TASKS_URL;
-  }
-  function normalizeUrl(urlLike) {
-    try {
-      const u = new URL(urlLike, location.origin);
-      let p = u.pathname.replace(/\/{2,}/g, "/");
-      if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1);
-      return `${u.origin}${p}${u.search}`;
-    } catch (_) {
-      return String(urlLike || "");
-    }
-  }
-  function sameNormalizedUrl(a, b) {
-    return normalizeUrl(a) === normalizeUrl(b);
-  }
-
-  // ------------------------------------------------
-  // 0) STRICT SINGLE INSTANCE LOCK
-  // ------------------------------------------------
-  function enforceSingleInstance() {
-    const KEY = "AB2_MTURK_SUBS_SINGLE_INSTANCE";
-    const HEARTBEAT_MS = 2500;
-    const STALE_MS = 10000;
-    const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-
-    function readState() {
-      try { return JSON.parse(localStorage.getItem(KEY) || "null"); } catch (_) { return null; }
-    }
-    function writeState() {
-      try {
-        localStorage.setItem(KEY, JSON.stringify({
-          id,
-          t: Date.now(),
-          url: normalizeUrl(location.href)
-        }));
-      } catch (_) {}
-    }
-
-    const active = readState();
-    if (active && active.id !== id && Date.now() - Number(active.t || 0) < STALE_MS) {
-      console.log("[mturk-auto] another instance is active, skipping this tab");
-      if (location.href === CANONICAL_TASKS_URL) {
-        location.replace(TASKS_URL_NO_SLASH);
-      }
-      return false;
-    }
-
-    writeState();
-    const hb = setInterval(() => {
-      const current = readState();
-      if (current && current.id && current.id !== id && Date.now() - Number(current.t || 0) < STALE_MS) {
-        clearInterval(hb);
-        return;
-      }
-      writeState();
-    }, HEARTBEAT_MS);
-
-    window.addEventListener("beforeunload", () => {
-      try {
-        const current = readState();
-        if (current && current.id === id) localStorage.removeItem(KEY);
-      } catch (_) {}
-      clearInterval(hb);
-    });
-    return true;
-  }
-
-  if (!isExactAllowedUrl()) return;
-  if (!enforceSingleInstance()) return;
-
-  // ------------------------------------------------
-  // 1) TAB LIMITER (same as your version)
-  // ------------------------------------------------
-  function AB2softTabLimiter() {
-    const MAX_TABS = 3;              // allow any 3 tabs total
-    const STORAGE_KEY = "AB2_TAB_TRACKER";
-    const CHECK_DELAY = 1500;        // wait 1.5 s before enforcing (stabilization)
-    const STALE_AGE = 8000;          // remove tabs not updated in 8 s
-    const tabId = Date.now() + Math.random().toString(16).slice(2);
-
-    const getTabs = () => {
-      try {
-        const all = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-        const now = Date.now();
-        for (const [id, rec] of Object.entries(all)) {
-          if (!rec || now - rec.time > STALE_AGE) delete all[id];
-        }
-        return all;
-      } catch { return {}; }
-    };
-    const saveTabs = (obj) => localStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
-    const cleanup = () => { const t = getTabs(); delete t[tabId]; saveTabs(t); };
-
-    const tabs = getTabs();
-    tabs[tabId] = { url: location.href, time: Date.now() };
-    saveTabs(tabs);
-    window.addEventListener("beforeunload", cleanup);
-
-    setInterval(() => {
-      const t = getTabs();
-      if (t[tabId]) { t[tabId].time = Date.now(); saveTabs(t); }
-    }, 3000);
-
-    setTimeout(() => {
-      const allTabs = Object.keys(getTabs());
-      if (allTabs.length > MAX_TABS) {
-        console.log("AB2soft: closing extra tab →", location.href);
-        try { window.close(); } catch (_) {}
-      }
-    }, CHECK_DELAY);
-  }
-
-  // run once when script starts
-  AB2softTabLimiter();
-
-  // ------------------------------------------------
-  // 2) AUTO CLOSE “NO MORE HITs AVAILABLE” PAGE
-  // ------------------------------------------------
+  /* =========================================================
+     2) AUTO CLOSE “NO MORE HITs AVAILABLE” PAGE
+  ========================================================= */
   function hasNoMoreHitsSignal() {
     const bodyText = ((document.body && document.body.innerText) || "").toLowerCase();
-    if (
-      bodyText.includes("there are no more of these hits available") ||
-      bodyText.includes("browse all available hits")
-    ) {
-      return true;
-    }
+    if (bodyText.includes("there are no more of these hits available") || bodyText.includes("browse all available hits")) return true;
 
     const alertNodes = Array.from(document.querySelectorAll('div[data-react-class*="alert/Alert"]'));
     for (const node of alertNodes) {
@@ -210,10 +264,8 @@
       if (
         txt.includes("there are no more of these hits available") ||
         props.includes("there are no more of these hits available") ||
-        props.includes("browse") && props.includes("all available hits")
-      ) {
-        return true;
-      }
+        (props.includes("browse") && props.includes("all available hits"))
+      ) return true;
     }
     return false;
   }
@@ -223,16 +275,17 @@
       if (hasNoMoreHitsSignal()) {
         console.log("🚫 No more HITs available — closing tab...");
         clearInterval(checkInterval);
-        window.close();
+        try { window.close(); } catch (_) {}
+        setTimeout(() => { try { location.replace("about:blank"); } catch (_) {} }, 400);
       }
     }, 1000);
     setTimeout(() => clearInterval(checkInterval), 20000);
   }
   AB2softAutoCloseEmptyHit();
 
-  // ------------------------------------------------
-  // 3) COOKIE GUARD (prevents cookie-too-large loops)
-  // ------------------------------------------------
+  /* =========================================================
+     3) COOKIE GUARD (prevents cookie-too-large loops)
+  ========================================================= */
   let cookieGuardStarted = false;
   function AB2softCookieGuard(options = {}) {
     const isMTurkHost = location.hostname.includes("mturk.com");
@@ -245,30 +298,15 @@
     const MAX_COOKIE_HEADER = aggressive ? 5500 : 6800;
     const MAX_COOKIE_COUNT = aggressive ? 22 : 30;
     const PROTECTED_PREFIXES = [
-      "session-id",
-      "session-id-time",
-      "session-token",
-      "ubid-",
-      "at-main",
-      "sess-at-",
-      "x-main",
-      "frc",
-      "map-",
-      "sst-",
-      "regstatus",
-      "i18n-prefs",
-      "lc-",
-      "skin"
+      "session-id","session-id-time","session-token","ubid-","at-main","sess-at-","x-main","frc",
+      "map-","sst-","regstatus","i18n-prefs","lc-","skin"
     ];
-    const PROTECTED_EXACT_NAMES = new Set([
-      "csm-hit"
-    ]);
+    const PROTECTED_EXACT_NAMES = new Set(["csm-hit"]);
 
     function getBaseDomain() {
       const parts = location.hostname.split(".");
       return parts.length >= 2 ? parts.slice(-2).join(".") : location.hostname;
     }
-
     function parseCookies() {
       const raw = document.cookie || "";
       const pairs = raw ? raw.split(/;\s*/) : [];
@@ -284,13 +322,11 @@
       }
       return out;
     }
-
     function isProtectedCookie(name) {
       const lower = name.toLowerCase();
       if (PROTECTED_EXACT_NAMES.has(lower)) return true;
       return PROTECTED_PREFIXES.some(prefix => lower.startsWith(prefix));
     }
-
     function clearCookieEverywhere(name) {
       const expires = "Thu, 01 Jan 1970 00:00:00 GMT";
       const baseDomain = getBaseDomain();
@@ -299,22 +335,17 @@
       const domains = [`.${baseDomain}`, hostname, ""];
       for (const path of paths) {
         for (const domain of domains) {
-          if (domain) {
-            document.cookie = `${name}=; expires=${expires}; path=${path}; domain=${domain}`;
-          } else {
-            document.cookie = `${name}=; expires=${expires}; path=${path}`;
-          }
+          if (domain) document.cookie = `${name}=; expires=${expires}; path=${path}; domain=${domain}`;
+          else document.cookie = `${name}=; expires=${expires}; path=${path}`;
         }
       }
     }
-
     function runSinglePass(forceDropNonEssential = false) {
       const before = parseCookies();
       if (!before.length) return { removed: 0, beforeCount: 0, afterCount: 0 };
       const beforeHeaderBytes = (document.cookie || "").length;
       let removed = 0;
 
-      // First pass: drop oversized cookies (or all non-essential in aggressive mode)
       for (const { name, value } of before) {
         if (isProtectedCookie(name)) continue;
         if (forceDropNonEssential || value.length > MAX_COOKIE_VALUE) {
@@ -323,7 +354,6 @@
         }
       }
 
-      // Second pass: if total header still too large, drop all remaining non-essential.
       let current = parseCookies();
       const headerLen = (document.cookie || "").length;
       if (headerLen > MAX_COOKIE_HEADER || current.length > MAX_COOKIE_COUNT) {
@@ -336,24 +366,12 @@
       }
 
       const afterHeaderBytes = (document.cookie || "").length;
-      console.log("[AB2softCookieGuard]", {
-        reason,
-        aggressive,
-        beforeCount: before.length,
-        afterCount: current.length,
-        beforeHeaderBytes,
-        afterHeaderBytes,
-        removed,
-        protectedPrefixes: PROTECTED_PREFIXES.length
-      });
+      console.log("[AB2softCookieGuard]", { reason, aggressive, beforeCount: before.length, afterCount: current.length, beforeHeaderBytes, afterHeaderBytes, removed });
       return { removed, beforeCount: before.length, afterCount: current.length };
     }
 
     const stats = runSinglePass(aggressive);
-    if (aggressive) {
-      // Some cookies can reappear immediately; do one more quick pass.
-      setTimeout(() => runSinglePass(true), 350);
-    }
+    if (aggressive) setTimeout(() => runSinglePass(true), 350);
 
     if (!cookieGuardStarted) {
       cookieGuardStarted = true;
@@ -361,15 +379,13 @@
       window.addEventListener("focus", () => AB2softCookieGuard({ reason: "window-focus" }));
       window.addEventListener("pageshow", () => AB2softCookieGuard({ reason: "pageshow" }));
     }
-
     return stats;
   }
-
   AB2softCookieGuard();
 
-  // ------------------------------------------------
-  // 4) FIND & SUBMIT CAPTCHA / CONTINUE FOR ERROR PAGES
-  // ------------------------------------------------
+  /* =========================================================
+     4) CAPTCHA / ERROR AUTO CONTINUE (only on /errors pages)
+  ========================================================= */
   function findValidateForm() {
     const f1 = document.querySelector('form[action*="/errors/validateCaptcha"]');
     if (f1) return f1;
@@ -393,50 +409,19 @@
       if (text.includes('continue') || text.includes('continue shopping')) return el;
     }
     const prim = document.querySelector('.a-button .a-button-text, .a-button-primary .a-button-text, .a-button-inner button');
-    if (prim) return prim;
-    return null;
+    return prim || null;
   }
-
-  // Optional style from your code (button, not used right now)
-  const style = document.createElement("style");
-  style.textContent = `
-    #mturkQueueBtn {
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      background: #2c3e50;
-      color: #fff;
-      font-size: 14px;
-      padding: 8px 12px;
-      border-radius: 6px;
-      cursor: pointer;
-      z-index: 99999;
-      box-shadow: 0 3px 8px rgba(0,0,0,0.3);
-      font-family: sans-serif;
-    }
-    #mturkQueueBtn:hover {
-      background: #34495e;
-    }
-  `;
-  document.head.appendChild(style);
 
   function synthClick(el) {
     try {
       el.focus && el.focus();
       const types = ['mouseover','pointerover','mousemove','mousedown','pointerdown','mouseup','pointerup','click'];
       for (const t of types) {
-        try {
-          const ev = new MouseEvent(t, { bubbles: true, cancelable: true, view: window });
-          el.dispatchEvent(ev);
-        } catch (e) {}
+        try { el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })); } catch (_) {}
       }
-      try { el.click(); } catch (e) {}
-      console.log('[mturk-auto] synthClick dispatched');
+      try { el.click(); } catch (_) {}
       return true;
-    } catch (e) {
-      console.warn('[mturk-auto] synthClick error', e);
-      return false;
-    }
+    } catch (_) { return false; }
   }
 
   async function fetchSubmitForm(form) {
@@ -457,9 +442,7 @@
         const qs = new URLSearchParams(data).toString();
         const full = url + (url.indexOf('?') === -1 ? '?' + qs : '&' + qs);
         const resp = await fetch(full, { method: 'GET', credentials: 'include', cache: 'no-store' });
-        const txt = await resp.text();
-        console.log('[mturk-auto] fetchSubmitForm GET status', resp.status);
-        if (/Your HITs Queue/i.test(txt) || resp.status === 302 || resp.status === 200) return true;
+        if (resp.status === 302 || resp.status === 200) return true;
       } else {
         const resp = await fetch(url, {
           method: 'POST',
@@ -467,13 +450,9 @@
           cache: 'no-store',
           body: new URLSearchParams(data)
         });
-        const txt = await resp.text();
-        console.log('[mturk-auto] fetchSubmitForm POST status', resp.status);
-        if (/Your HITs Queue/i.test(txt) || resp.status === 302 || resp.status === 200) return true;
+        if (resp.status === 302 || resp.status === 200) return true;
       }
-    } catch (e) {
-      console.warn('[mturk-auto] fetchSubmitForm error', e);
-    }
+    } catch (_) {}
     return false;
   }
 
@@ -483,37 +462,18 @@
 
     const form = findValidateForm();
     const btn = findContinueButton(form);
-    if (!form && !btn) {
-      console.log('[mturk-auto] no form/button found yet');
-      return;
-    }
-
-    console.log('[mturk-auto] found', { hasForm: !!form, hasButton: !!btn });
+    if (!form && !btn) return;
 
     if (btn) {
-      try {
-        synthClick(btn);
-      } catch (e) { console.warn('[mturk-auto] click error', e); }
+      try { synthClick(btn); } catch (_) {}
     }
 
     if (form) {
       try {
-        try {
-          form.submit();
-          console.log('[mturk-auto] form.submit() called');
-          return;
-        } catch (e) {
-          console.warn('[mturk-auto] form.submit() error', e);
-        }
-
+        try { form.submit(); return; } catch (_) {}
         const ok = await fetchSubmitForm(form);
-        if (ok) {
-          console.log('[mturk-auto] fetchSubmitForm likely succeeded');
-          return;
-        }
-      } catch (e) {
-        console.warn('[mturk-auto] form handling error', e);
-      }
+        if (ok) return;
+      } catch (_) {}
     }
   }
 
@@ -521,29 +481,25 @@
     attemptOnce();
 
     try {
-      observer = new MutationObserver(() => {
-        attemptOnce();
-      });
+      observer = new MutationObserver(() => { attemptOnce(); });
       observer.observe(document.documentElement || document.body, {
         childList: true,
         subtree: true,
         attributes: true
       });
-    } catch (e) {
-      console.warn('[mturk-auto] observer failed', e);
-    }
+    } catch (_) {}
 
     intervalId = setInterval(() => {
       if (!location.pathname.includes('/errors')) {
         clearInterval(intervalId);
-        if (observer) try { observer.disconnect(); } catch (e) {}
+        if (observer) try { observer.disconnect(); } catch (_) {}
         return;
       }
       attemptOnce();
     }, RETRY_INTERVAL_MS);
 
     window.addEventListener('beforeunload', () => {
-      if (observer) try { observer.disconnect(); } catch (e) {}
+      if (observer) try { observer.disconnect(); } catch (_) {}
       if (intervalId) clearInterval(intervalId);
     });
   }
@@ -555,9 +511,24 @@
     setTimeout(() => startWatching(), 300);
   }
 
-  // ------------------------------------------------
-  // 5) AUTO FIX 400 / 404 (autoFix404)
-  // ------------------------------------------------
+  /* =========================================================
+     5) AUTO FIX 400 / 404 → redirect to /tasks/
+     (This runs on all pages except /tasks/ itself)
+  ========================================================= */
+  function normalizeUrl(urlLike) {
+    try {
+      const u = new URL(urlLike, location.origin);
+      let p = u.pathname.replace(/\/{2,}/g, "/");
+      if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1);
+      return `${u.origin}${p}${u.search}`;
+    } catch (_) {
+      return String(urlLike || "");
+    }
+  }
+  function sameNormalizedUrl(a, b) {
+    return normalizeUrl(a) === normalizeUrl(b);
+  }
+
   function AB2softAutoFix404() {
     const bodyText = (document.body && document.body.innerText) ? document.body.innerText : "";
     const lower = bodyText.toLowerCase();
@@ -577,148 +548,35 @@
     function redirectToQueueOnce(reason) {
       try {
         const key = "AB2_404_FIX_USED";
-        if (sessionStorage.getItem(key) === location.href) {
-          console.log("[AB2softAutoFix404] Already tried fix for this URL, skipping");
-          return;
-        }
+        if (sessionStorage.getItem(key) === location.href) return;
         sessionStorage.setItem(key, location.href);
       } catch (_) {}
 
       console.log("[AB2softAutoFix404] Redirecting to queue due to:", reason);
-      if (!sameNormalizedUrl(location.href, CANONICAL_TASKS_URL)) {
-        location.assign(CANONICAL_TASKS_URL);
+      if (!sameNormalizedUrl(location.href, TASKS_SLASH)) {
+        location.assign(TASKS_SLASH);
       }
     }
 
     if (!isWorker) return;
 
     if (isCookieTooLarge) {
-      console.log("[AB2softAutoFix404] Detected 400 / cookie too large, running aggressive cookie cleanup...");
       AB2softCookieGuard({ aggressive: true, reason: "cookie-too-large-400" });
-      setTimeout(() => {
-        redirectToQueueOnce("cookie-too-large");
-      }, 900);
+      setTimeout(() => redirectToQueueOnce("cookie-too-large"), 900);
       return;
     }
 
     if (looks404) {
-      // Typical worker 404 on project / task pages
       if (/\/projects\/|\/tasks\/|\/errors\//.test(location.pathname)) {
         redirectToQueueOnce("mturk-404");
       }
     }
   }
-
-  // Run autoFix404 after DOM is ready a bit
   setTimeout(AB2softAutoFix404, 1200);
 
-  // ------------------------------------------------
-  // 6) PASSIVE ISSUE DETECTOR (no popup keepalive)
-  // ------------------------------------------------
-  function setupIssueDetector() {
-    if (!location.hostname.includes("mturk.com")) return;
-
-    const reported = new Set();
-    const reportOnce = (key, message) => {
-      if (reported.has(key)) return;
-      reported.add(key);
-      console.warn("[MTurk Detector]", message);
-    };
-
-    function scanIssues() {
-      const bodyText = (document.body && document.body.innerText) ? document.body.innerText.toLowerCase() : "";
-      const form = findValidateForm();
-      const continueBtn = findContinueButton(form);
-      const captchaLike =
-        !!form ||
-        !!document.querySelector('iframe[src*="captcha"], img[src*="captcha"], input[name="amzn"], input[name="amzn-r"]');
-
-      if (captchaLike) {
-        reportOnce("captcha", "Captcha/validation challenge detected.");
-      }
-      if (continueBtn) {
-        reportOnce("continue", "Continue button/action detected.");
-      }
-      if (bodyText.includes("there are no more of these hits available")) {
-        reportOnce("no-more-hits", "No more HITs available page detected.");
-      }
-      if (bodyText.includes("400 bad request") && bodyText.includes("request header or cookie too large")) {
-        reportOnce("cookie-too-large", "400 error: request header or cookie too large.");
-      }
-      if (
-        bodyText.includes("404") ||
-        bodyText.includes("page not found") ||
-        location.pathname.includes("/errors/404")
-      ) {
-        reportOnce("404", "404/page-not-found condition detected.");
-      }
-    }
-
-    scanIssues();
-
-    const issueObserver = new MutationObserver(() => scanIssues());
-    if (document.documentElement) {
-      issueObserver.observe(document.documentElement, {
-        childList: true,
-        subtree: true,
-        characterData: true
-      });
-    }
-
-    const issueInterval = setInterval(scanIssues, 3000);
-    window.addEventListener("beforeunload", () => {
-      try { issueObserver.disconnect(); } catch (_) {}
-      clearInterval(issueInterval);
-    });
-  }
-  //setupIssueDetector();
-
-  // ------------------------------------------------
-  // 7) BACKGROUND WORKER POPUP PING (every 3-5 min)
-  // ------------------------------------------------
-  function scheduleBackgroundWorkerPing() {
-    if (!location.hostname.includes("mturk.com")) return;
-    const MIN_MS = 180000; // 3 min
-    const MAX_MS = 300000; // 5 min
-    let stopped = false;
-
-    const run = () => {
-      if (stopped) return;
-      const delay = Math.floor(Math.random() * (MAX_MS - MIN_MS + 1)) + MIN_MS;
-      setTimeout(() => {
-        if (stopped) return;
-        try {
-          if (sameNormalizedUrl(location.href, CANONICAL_TASKS_URL)) {
-            run();
-            return;
-          }
-          const w = window.open(
-            CANONICAL_TASKS_URL,
-            "mturkBackgroundPing",
-            "noopener,noreferrer,width=120,height=120,left=0,top=0"
-          );
-          if (w) {
-            try { w.blur(); } catch (_) {}
-            try { window.focus(); } catch (_) {}
-            setTimeout(() => {
-              try { w.close(); } catch (_) {}
-            }, 5000);
-          }
-        } catch (_) {}
-        run();
-      }, delay);
-    };
-
-    run();
-    window.addEventListener("beforeunload", () => {
-      stopped = true;
-    });
-  }
-  //scheduleBackgroundWorkerPing();
-
-  // ------------------------------------------------
-  // 8) AUTO CLOSE TAB WHEN “HIT SUBMITTED” (separate function)
-  // ------------------------------------------------
+  /* =========================================================
+     6) AUTO CLOSE TAB WHEN “HIT SUBMITTED” (extra safety)
+  ========================================================= */
   function setupAutoCloseOnSubmit() {
     function closeIfSubmitted() {
       const text = (document.body && document.body.innerText) ? document.body.innerText : "";
@@ -729,16 +587,16 @@
       const noLongerInQueue = text.includes("This HIT is no longer in your HITs queue");
       if (hasSubmitted || noMoreHits || hitNoLongerAvailable || hitCannotBeReturned || noLongerInQueue) {
         console.log("[MTurk AutoClose] Submit/No-more-HITs detected — closing tab...");
-        window.close();
+        try { window.close(); } catch (_) {}
+        setTimeout(() => { try { location.replace("about:blank"); } catch (_) {} }, 400);
       }
     }
 
-    const observer = new MutationObserver(closeIfSubmitted);
-    observer.observe(document.body, { childList: true, subtree: true });
-
+    const ob = new MutationObserver(closeIfSubmitted);
+    if (document.body) ob.observe(document.body, { childList: true, subtree: true });
     window.addEventListener('load', closeIfSubmitted);
   }
   setupAutoCloseOnSubmit();
 
-  console.log("✅ AB2soft MTurk Helper loaded (TabLimiter + CookieGuard + AutoFix404 + AutoClose)");
+  console.log("✅ AB2soft MTurk SUBS loaded (SKIP only tasks/ | tasks allowed | Max3 tabs | Same requester dedupe | CookieGuard | AutoFix404 | AutoClose)");
 })();
