@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         MTurk SUBS 
+// @name         MTurk SUBS2 
 // @namespace    Violentmonkey Scripts
-// @version      4.0
+// @version      4.2
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -24,13 +24,13 @@
         - If another tab opens EXACT tasks/ again -> immediately change it to tasks (no slash)
           so it won't disturb the main tasks/ tab.
      B) Main tasks/ tab:
-        - NOTHING else should run there (no close watcher, no idle killer, etc.)
+        - NOTHING else should run there (no close watcher, etc.)
         - Never kill it.
      C) All other tabs:
-        - Global MAX 3 tabs total (tasks/ included in counting, but never killed)
-        - Extra tabs close silently
+        - Global MAX 3 tabs total (tasks/ included in counting)
+        - If overflow starts from https://worker.mturk.com/projects/, force tab #2 to https://worker.mturk.com/tasks
+        - Any tab beyond 3 closes silently without disturbing kept tabs
         - If HIT expired/unavailable/submitted -> close that tab
-        - If tab idle for 1 minute -> close that tab
         - Other logics run as usual (cookie guard, captcha continue on errors, autoFix 400/404)
   ========================================================= */
 
@@ -93,14 +93,37 @@
   // ---------------------------------------------------------
   const MAX_TABS = 3;
   const TRACK_KEY = "AB2_GLOBAL_TABS_V4";
+  const CMD_KEY_PREFIX = "AB2_TAB_CMD_V1_";
   const HEARTBEAT_MS = 2000;
   const STALE_MS = 12000;
 
   const tabId = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const ownCmdKey = `${CMD_KEY_PREFIX}${tabId}`;
+  let lastCmdId = "";
 
   function safeJSONParse(s) { try { return JSON.parse(s); } catch (_) { return null; } }
   function readTracker() { return safeJSONParse(localStorage.getItem(TRACK_KEY) || "{}") || {}; }
   function writeTracker(m) { try { localStorage.setItem(TRACK_KEY, JSON.stringify(m)); } catch (_) {} }
+  function toURL(urlLike) { try { return new URL(urlLike, location.origin); } catch (_) { return null; } }
+  function isTasksSlashUrl(urlLike) {
+    const u = toURL(urlLike);
+    return !!u && u.origin === "https://worker.mturk.com" && u.pathname === "/tasks/";
+  }
+  function isTasksNoSlashUrl(urlLike) {
+    const u = toURL(urlLike);
+    return !!u && u.origin === "https://worker.mturk.com" && u.pathname === "/tasks";
+  }
+  function isProjectsUrl(urlLike) {
+    const u = toURL(urlLike);
+    return !!u && u.origin === "https://worker.mturk.com" && u.pathname.startsWith("/projects/");
+  }
+  function sortedTabs(tr) {
+    return Object.entries(tr || {}).sort((a, b) => {
+      const ta = Number(a[1] && (a[1].born || a[1].t || 0)) || 0;
+      const tb = Number(b[1] && (b[1].born || b[1].t || 0)) || 0;
+      return ta - tb;
+    });
+  }
 
   function cleanupStale(tr) {
     const out = tr || {};
@@ -123,27 +146,125 @@
     }, 200);
   }
 
+  function sendTabCommand(targetId, action, extra = {}) {
+    const cmd = { id: `${Date.now()}_${Math.random().toString(16).slice(2)}`, targetId, action, ...extra };
+    if (targetId === tabId) {
+      runTabCommand(cmd);
+      return;
+    }
+    try { localStorage.setItem(`${CMD_KEY_PREFIX}${targetId}`, JSON.stringify(cmd)); } catch (_) {}
+  }
+
+  function runTabCommand(cmd) {
+    if (!cmd || cmd.targetId !== tabId || !cmd.id || cmd.id === lastCmdId) return;
+    lastCmdId = cmd.id;
+
+    if (cmd.action === "redirect_tasks_noslash") {
+      if (!isTasksSlashUrl(location.href) && !isTasksNoSlashUrl(location.href)) {
+        try { location.replace(TASKS_NOSLASH); } catch (_) {}
+      }
+      return;
+    }
+
+    if (cmd.action === "close_silent") {
+      if (!isTasksSlashUrl(location.href)) silentClose(String(cmd.reason || "remote-close"));
+    }
+  }
+
+  function checkOwnCommand() {
+    try {
+      const cmd = safeJSONParse(localStorage.getItem(ownCmdKey) || "null");
+      runTabCommand(cmd);
+    } catch (_) {}
+  }
+
+  function enforceTabPolicy() {
+    let state = cleanupStale(readTracker());
+    const stamp = now();
+
+    for (const rec of Object.values(state)) {
+      if (!rec) continue;
+      if (!rec.born) rec.born = Number(rec.t || stamp) || stamp;
+    }
+    writeTracker(state);
+
+    const ordered = sortedTabs(state);
+    if (ordered.length <= MAX_TABS) return;
+
+    // If overflow is caused while on /projects/, force tab #2 to become /tasks.
+    if (isProjectsUrl(location.href)) {
+      const second = ordered[1];
+      if (second) {
+        const [sid, srec] = second;
+        if (!isTasksSlashUrl(srec.url) && !isTasksNoSlashUrl(srec.url)) {
+          sendTabCommand(sid, "redirect_tasks_noslash");
+        }
+      }
+    }
+
+    const keep = new Set();
+    const main = ordered.find(([, rec]) => isTasksSlashUrl(rec.url));
+    const secondTasks = ordered.find(([, rec]) => isTasksNoSlashUrl(rec.url));
+
+    if (main) keep.add(main[0]);
+    if (secondTasks) keep.add(secondTasks[0]);
+
+    for (const [id] of ordered) {
+      if (keep.size >= MAX_TABS) break;
+      keep.add(id);
+    }
+
+    for (const [id] of ordered) {
+      if (keep.has(id)) continue;
+      if (id === tabId) {
+        silentClose(`max-tabs-exceeded count=${ordered.length} max=${MAX_TABS}`);
+        return;
+      }
+      sendTabCommand(id, "close_silent", { reason: `max-tabs-exceeded count=${ordered.length} max=${MAX_TABS}` });
+    }
+  }
+
+  window.addEventListener("storage", (e) => {
+    if (e.key === ownCmdKey) {
+      runTabCommand(safeJSONParse(e.newValue || "null"));
+    }
+  });
+
   // Register this tab (including tasks/)
   let tr = cleanupStale(readTracker());
-  tr[tabId] = { url: location.href, t: now(), isTasksSlash: isTasksSlash ? 1 : 0 };
+  tr[tabId] = {
+    url: location.href,
+    t: now(),
+    born: now(),
+    isTasksSlash: isTasksSlashUrl(location.href) ? 1 : 0,
+    isTasksNoSlash: isTasksNoSlashUrl(location.href) ? 1 : 0,
+    isProjects: isProjectsUrl(location.href) ? 1 : 0
+  };
   writeTracker(tr);
-
-  // Enforce max tabs: kill only non-tasks/ tabs
-  tr = cleanupStale(readTracker());
-  const count = Object.keys(tr).length;
-  if (count > MAX_TABS && !isTasksSlash) {
-    silentClose(`max-tabs-exceeded count=${count} max=${MAX_TABS}`);
-    return;
-  }
+  enforceTabPolicy();
 
   // Heartbeat + cleanup
   const hb = setInterval(() => {
+    checkOwnCommand();
     let t2 = cleanupStale(readTracker());
-    if (!t2[tabId]) t2[tabId] = { url: location.href, t: now(), isTasksSlash: isTasksSlash ? 1 : 0 };
+    if (!t2[tabId]) {
+      t2[tabId] = {
+        url: location.href,
+        t: now(),
+        born: now(),
+        isTasksSlash: isTasksSlashUrl(location.href) ? 1 : 0,
+        isTasksNoSlash: isTasksNoSlashUrl(location.href) ? 1 : 0,
+        isProjects: isProjectsUrl(location.href) ? 1 : 0
+      };
+    }
     t2[tabId].t = now();
+    t2[tabId].born = Number(t2[tabId].born || t2[tabId].t || now()) || now();
     t2[tabId].url = location.href;
-    t2[tabId].isTasksSlash = isTasksSlash ? 1 : 0;
+    t2[tabId].isTasksSlash = isTasksSlashUrl(location.href) ? 1 : 0;
+    t2[tabId].isTasksNoSlash = isTasksNoSlashUrl(location.href) ? 1 : 0;
+    t2[tabId].isProjects = isProjectsUrl(location.href) ? 1 : 0;
     writeTracker(t2);
+    enforceTabPolicy();
   }, HEARTBEAT_MS);
 
   window.addEventListener("beforeunload", () => {
@@ -153,27 +274,11 @@
       delete t3[tabId];
       writeTracker(t3);
     } catch (_) {}
+    try { localStorage.removeItem(ownCmdKey); } catch (_) {}
   });
 
   // ✅ NOTHING else should run on main tasks/ tab
   if (isTasksSlash) return;
-
-  /* =========================================================
-     1) IDLE CLOSE (1 minute) for non-main tabs
-  ========================================================= */
-  const IDLE_MS = 60000;
-  let lastActive = now();
-  function markActive() { lastActive = now(); }
-
-  ["mousemove","mousedown","keydown","scroll","touchstart","wheel","pointerdown"].forEach(evt => {
-    window.addEventListener(evt, markActive, { passive: true, capture: true });
-  });
-  window.addEventListener("focus", markActive);
-  window.addEventListener("visibilitychange", () => { if (!document.hidden) markActive(); });
-
-  setInterval(() => {
-    if (now() - lastActive > IDLE_MS) silentClose("idle>60s");
-  }, 5000);
 
   /* =========================================================
      2) CLOSE IF HIT EXPIRED / UNAVAILABLE / OUT OF QUEUE / SUBMITTED
