@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         MTurk SUBS
+// @name         MTurk SUBS 
 // @namespace    Violentmonkey Scripts
-// @version      4.3
+// @version      4.4
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -294,6 +294,9 @@
       "this hit is no longer in your hits queue",
       "this hit has expired",
       "hit has expired",
+      "assignment has expired",
+      "task has expired",
+      "you can no longer submit",
       "expired",
       "no longer available to you"
     ];
@@ -315,10 +318,11 @@
     try { mo.observe(document.documentElement || document.body, { childList: true, subtree: true, characterData: true }); } catch (_) {}
     const iv = setInterval(tryClose, 1200);
 
-    setTimeout(() => {
+    // Keep watching for the full tab lifetime so long-duration HITs are still caught.
+    window.addEventListener("beforeunload", () => {
       try { mo.disconnect(); } catch (_) {}
       try { clearInterval(iv); } catch (_) {}
-    }, 120000);
+    });
   }
   setupCloseExpiredWatcher();
 
