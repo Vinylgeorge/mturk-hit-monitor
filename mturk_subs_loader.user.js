@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MTurk SUBS 
 // @namespace    Violentmonkey Scripts
-// @version      3.11
+// @version      4.0
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -19,31 +19,85 @@
   'use strict';
 
   /* =========================================================
-      YOUR RULES (final):
-     1) MAIN working tab = EXACT https://worker.mturk.com/tasks/
-        - NOTHING should work there (no closers, no cookie guard, nothing)
-        - also: do NOT kill it
-     2) All OTHER tabs:
+     YOUR RULES (updated):
+     A) ONLY ONE specific tasks/ URL is allowed:
+        - If another tab opens EXACT tasks/ again -> immediately change it to tasks (no slash)
+          so it won't disturb the main tasks/ tab.
+     B) Main tasks/ tab:
+        - NOTHING else should run there (no close watcher, no idle killer, etc.)
+        - Never kill it.
+     C) All other tabs:
         - Global MAX 3 tabs total (tasks/ included in counting, but never killed)
         - Extra tabs close silently
-        - If HIT is expired/unavailable -> close that tab
-        - If tab is IDLE for 1 minute -> close that tab
+        - If HIT expired/unavailable/submitted -> close that tab
+        - If tab idle for 1 minute -> close that tab
+        - Other logics run as usual (cookie guard, captcha continue on errors, autoFix 400/404)
   ========================================================= */
 
   const TASKS_SLASH = "https://worker.mturk.com/tasks/";
-  const isMainTasks = (location.href === TASKS_SLASH);
+  const TASKS_NOSLASH = "https://worker.mturk.com/tasks";
+  const isTasksSlash = (location.href === TASKS_SLASH);
+
+  function now() { return Date.now(); }
 
   // ---------------------------------------------------------
-  // 0) GLOBAL TAB REGISTRY (used for Max3 + stale cleanup)
+  // A) ONLY ONE tasks/ TAB OWNER
+  //    If not owner -> redirect THIS tab to tasks (no slash)
+  // ---------------------------------------------------------
+  (function enforceSingleTasksSlash() {
+    if (!isTasksSlash) return;
+
+    const KEY = "AB2_TASKS_SLASH_OWNER_V1";
+    const STALE_MS = 12000;
+    const HEARTBEAT_MS = 3000;
+    const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+    function read() { try { return JSON.parse(localStorage.getItem(KEY) || "null"); } catch (_) { return null; } }
+    function write() { try { localStorage.setItem(KEY, JSON.stringify({ id, t: now() })); } catch (_) {} }
+
+    const cur = read();
+    if (cur && cur.id && cur.id !== id && (now() - Number(cur.t || 0) < STALE_MS)) {
+      // Another tasks/ owner exists -> convert THIS duplicate tasks/ tab to tasks (no slash)
+      try { location.replace(TASKS_NOSLASH); } catch (_) {}
+      return;
+    }
+
+    // Become the owner
+    write();
+
+    const hb = setInterval(() => {
+      const c = read();
+      if (c && c.id && c.id !== id && (now() - Number(c.t || 0) < STALE_MS)) {
+        // Lost ownership to a newer tab somehow -> convert this tab to tasks (no slash)
+        clearInterval(hb);
+        try { location.replace(TASKS_NOSLASH); } catch (_) {}
+        return;
+      }
+      write();
+    }, HEARTBEAT_MS);
+
+    window.addEventListener("beforeunload", () => {
+      try {
+        const c = read();
+        if (c && c.id === id) localStorage.removeItem(KEY);
+      } catch (_) {}
+      try { clearInterval(hb); } catch (_) {}
+    });
+  })();
+
+  // If we were a duplicate tasks/ tab, we already redirected; stop this run.
+  if (isTasksSlash && location.href !== TASKS_SLASH) return;
+
+  // ---------------------------------------------------------
+  // 0) GLOBAL TAB REGISTRY (Max3 + stale cleanup)
   // ---------------------------------------------------------
   const MAX_TABS = 3;
-  const TRACK_KEY = "AB2_GLOBAL_TABS_V3";
+  const TRACK_KEY = "AB2_GLOBAL_TABS_V4";
   const HEARTBEAT_MS = 2000;
   const STALE_MS = 12000;
 
   const tabId = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
 
-  function now() { return Date.now(); }
   function safeJSONParse(s) { try { return JSON.parse(s); } catch (_) { return null; } }
   function readTracker() { return safeJSONParse(localStorage.getItem(TRACK_KEY) || "{}") || {}; }
   function writeTracker(m) { try { localStorage.setItem(TRACK_KEY, JSON.stringify(m)); } catch (_) {} }
@@ -58,7 +112,6 @@
   }
 
   function silentClose(reason) {
-    // close without disturbing current window; fallback to about:blank if blocked
     let tries = 0;
     const iv = setInterval(() => {
       tries++;
@@ -70,26 +123,26 @@
     }, 200);
   }
 
-  // Register THIS tab (including tasks/)
+  // Register this tab (including tasks/)
   let tr = cleanupStale(readTracker());
-  tr[tabId] = { url: location.href, t: now(), isTasksSlash: isMainTasks ? 1 : 0 };
+  tr[tabId] = { url: location.href, t: now(), isTasksSlash: isTasksSlash ? 1 : 0 };
   writeTracker(tr);
 
-  // Enforce max tabs: if >3, close ONLY non-main tabs
+  // Enforce max tabs: kill only non-tasks/ tabs
   tr = cleanupStale(readTracker());
   const count = Object.keys(tr).length;
-  if (count > MAX_TABS && !isMainTasks) {
+  if (count > MAX_TABS && !isTasksSlash) {
     silentClose(`max-tabs-exceeded count=${count} max=${MAX_TABS}`);
     return;
   }
 
-  // Heartbeat
+  // Heartbeat + cleanup
   const hb = setInterval(() => {
     let t2 = cleanupStale(readTracker());
-    if (!t2[tabId]) t2[tabId] = { url: location.href, t: now(), isTasksSlash: isMainTasks ? 1 : 0 };
+    if (!t2[tabId]) t2[tabId] = { url: location.href, t: now(), isTasksSlash: isTasksSlash ? 1 : 0 };
     t2[tabId].t = now();
     t2[tabId].url = location.href;
-    t2[tabId].isTasksSlash = isMainTasks ? 1 : 0;
+    t2[tabId].isTasksSlash = isTasksSlash ? 1 : 0;
     writeTracker(t2);
   }, HEARTBEAT_MS);
 
@@ -102,17 +155,14 @@
     } catch (_) {}
   });
 
-  // ✅ Nothing should run on main tasks/ tab
-  if (isMainTasks) return;
+  // ✅ NOTHING else should run on main tasks/ tab
+  if (isTasksSlash) return;
 
   /* =========================================================
      1) IDLE CLOSE (1 minute) for non-main tabs
-     - "Idle" = no user interaction (mouse/keyboard/scroll/touch)
-     - after 60s idle -> close silently
   ========================================================= */
   const IDLE_MS = 60000;
   let lastActive = now();
-
   function markActive() { lastActive = now(); }
 
   ["mousemove","mousedown","keydown","scroll","touchstart","wheel","pointerdown"].forEach(evt => {
@@ -122,18 +172,14 @@
   window.addEventListener("visibilitychange", () => { if (!document.hidden) markActive(); });
 
   setInterval(() => {
-    if (now() - lastActive > IDLE_MS) {
-      silentClose("idle>60s");
-    }
+    if (now() - lastActive > IDLE_MS) silentClose("idle>60s");
   }, 5000);
 
   /* =========================================================
-     2) CLOSE IF HIT EXPIRED / UNAVAILABLE / OUT OF QUEUE
-     - includes your previous phrases + stronger expired wording
+     2) CLOSE IF HIT EXPIRED / UNAVAILABLE / OUT OF QUEUE / SUBMITTED
   ========================================================= */
   function shouldCloseExpired() {
     const text = ((document.body && document.body.innerText) || "").toLowerCase();
-
     const phrases = [
       "hit submitted",
       "there are no more of these hits available",
@@ -141,43 +187,29 @@
       "this hit is no longer available",
       "this hit cannot be returned",
       "this hit is no longer in your hits queue",
-      "expired",                          // catch generic “expired”
-      "this hit has expired",             // common wording
-      "you have exceeded",                // sometimes appears with blocks/errors
+      "this hit has expired",
+      "hit has expired",
+      "expired",
       "no longer available to you"
     ];
+    for (const p of phrases) if (text.includes(p)) return true;
 
-    for (const p of phrases) {
-      if (text.includes(p)) return true;
-    }
-
-    // react alert props check
     const alertNodes = Array.from(document.querySelectorAll('div[data-react-class*="alert/Alert"]'));
     for (const node of alertNodes) {
       const props = (node.getAttribute("data-react-props") || "").toLowerCase();
-      for (const p of phrases) {
-        if (props.includes(p)) return true;
-      }
+      for (const p of phrases) if (props.includes(p)) return true;
     }
     return false;
   }
 
   function setupCloseExpiredWatcher() {
-    const tryClose = () => {
-      if (shouldCloseExpired()) {
-        silentClose("expired/unavailable/submitted");
-      }
-    };
-
+    const tryClose = () => { if (shouldCloseExpired()) silentClose("expired/unavailable/submitted"); };
     tryClose();
-    const mo = new MutationObserver(tryClose);
-    try {
-      mo.observe(document.documentElement || document.body, { childList: true, subtree: true, characterData: true });
-    } catch (_) {}
 
+    const mo = new MutationObserver(tryClose);
+    try { mo.observe(document.documentElement || document.body, { childList: true, subtree: true, characterData: true }); } catch (_) {}
     const iv = setInterval(tryClose, 1200);
 
-    // keep watcher up to 2 minutes
     setTimeout(() => {
       try { mo.disconnect(); } catch (_) {}
       try { clearInterval(iv); } catch (_) {}
@@ -186,7 +218,7 @@
   setupCloseExpiredWatcher();
 
   /* =========================================================
-     3) KEEP YOUR OTHER LOGICS "AS USUAL" (unchanged behavior)
+     3) OTHER LOGICS "AS USUAL"
      - CookieGuard
      - Captcha validate auto-continue (only /errors)
      - AutoFix 400/404 redirect to tasks/
@@ -208,9 +240,7 @@
       return String(urlLike || "");
     }
   }
-  function sameNormalizedUrl(a, b) {
-    return normalizeUrl(a) === normalizeUrl(b);
-  }
+  function sameNormalizedUrl(a, b) { return normalizeUrl(a) === normalizeUrl(b); }
 
   // --------------------------
   // Cookie guard
@@ -235,7 +265,6 @@
       const parts = location.hostname.split(".");
       return parts.length >= 2 ? parts.slice(-2).join(".") : location.hostname;
     }
-
     function parseCookies() {
       const raw = document.cookie || "";
       const pairs = raw ? raw.split(/;\s*/) : [];
@@ -251,13 +280,11 @@
       }
       return out;
     }
-
     function isProtectedCookie(name) {
       const lower = name.toLowerCase();
       if (PROTECTED_EXACT_NAMES.has(lower)) return true;
       return PROTECTED_PREFIXES.some(prefix => lower.startsWith(prefix));
     }
-
     function clearCookieEverywhere(name) {
       const expires = "Thu, 01 Jan 1970 00:00:00 GMT";
       const baseDomain = getBaseDomain();
@@ -271,7 +298,6 @@
         }
       }
     }
-
     function runSinglePass(forceDropNonEssential = false) {
       const before = parseCookies();
       if (!before.length) return { removed: 0, beforeCount: 0, afterCount: 0 };
@@ -295,7 +321,6 @@
         }
         current = parseCookies();
       }
-
       return { removed, beforeCount: before.length, afterCount: current.length };
     }
 
@@ -406,11 +431,7 @@
     attemptOnce();
     try {
       observer = new MutationObserver(() => { attemptOnce(); });
-      observer.observe(document.documentElement || document.body, {
-        childList: true,
-        subtree: true,
-        attributes: true
-      });
+      observer.observe(document.documentElement || document.body, { childList: true, subtree: true, attributes: true });
     } catch (_) {}
 
     intervalId = setInterval(() => {
@@ -461,9 +482,7 @@
         sessionStorage.setItem(key, location.href);
       } catch (_) {}
 
-      if (!sameNormalizedUrl(location.href, TASKS_SLASH)) {
-        location.assign(TASKS_SLASH);
-      }
+      if (!sameNormalizedUrl(location.href, TASKS_SLASH)) location.assign(TASKS_SLASH);
     }
 
     if (!isWorker) return;
@@ -475,12 +494,10 @@
     }
 
     if (looks404) {
-      if (/\/projects\/|\/tasks\/|\/errors\//.test(location.pathname)) {
-        redirectToQueueOnce();
-      }
+      if (/\/projects\/|\/tasks\/|\/errors\//.test(location.pathname)) redirectToQueueOnce();
     }
   }
   setTimeout(AB2softAutoFix404, 1200);
 
-  console.log("✅ AB2soft MTurk SUBS loaded (tasks/ protected | Max3 | expired close | idle 1min close)");
+  console.log("✅ AB2soft MTurk SUBS loaded (ONLY 1x tasks/ allowed | tasks/ protected | Max3 | expired close | idle 1min close)");
 })();
