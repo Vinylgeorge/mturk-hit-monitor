@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MTurk SUBS 
 // @namespace    Violentmonkey Scripts
-// @version      4.4
+// @version      4.5
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -18,31 +18,27 @@
 (function () {
   'use strict';
 
-  /* =========================================================
-     YOUR RULES (updated):
-     A) ONLY ONE specific tasks/ URL is allowed:
-        - If another tab opens EXACT tasks/ again -> immediately change it to tasks (no slash)
-          so it won't disturb the main tasks/ tab.
-     B) Main tasks/ tab:
-        - NOTHING else should run there (no close watcher, etc.)
-        - Never kill it.
-     C) All other tabs:
-        - Global MAX 3 tabs total (tasks/ included in counting)
-        - If overflow starts from https://worker.mturk.com/projects/, force tab #2 to https://worker.mturk.com/tasks
-        - Any tab beyond 3 closes silently without disturbing kept tabs
-        - If HIT expired/unavailable/submitted -> close that tab
-        - Other logics run as usual (cookie guard, captcha continue on errors, autoFix 400/404)
-  ========================================================= */
-
   const TASKS_SLASH = "https://worker.mturk.com/tasks/";
   const TASKS_NOSLASH = "https://worker.mturk.com/tasks";
   const isTasksSlash = (location.href === TASKS_SLASH);
 
   function now() { return Date.now(); }
 
+  function silentClose(reason) {
+    let tries = 0;
+    const iv = setInterval(() => {
+      tries++;
+      try { window.close(); } catch (_) {}
+      if (tries >= 6) {
+        clearInterval(iv);
+        try { location.replace("about:blank"); } catch (_) {}
+      }
+    }, 200);
+  }
+
   // ---------------------------------------------------------
-  // A) ONLY ONE tasks/ TAB OWNER
-  //    If not owner -> redirect THIS tab to tasks (no slash)
+  // 1) ONLY ONE EXACT tasks/ OWNER
+  //    Duplicate exact tasks/ tabs are converted to tasks
   // ---------------------------------------------------------
   (function enforceSingleTasksSlash() {
     if (!isTasksSlash) return;
@@ -57,19 +53,15 @@
 
     const cur = read();
     if (cur && cur.id && cur.id !== id && (now() - Number(cur.t || 0) < STALE_MS)) {
-      // Another tasks/ owner exists -> convert THIS duplicate tasks/ tab to tasks (no slash)
       try { location.replace(TASKS_NOSLASH); } catch (_) {}
       return;
     }
 
-    // Become the owner
     write();
-
-    const hb = setInterval(() => {
+    const hbOwner = setInterval(() => {
       const c = read();
       if (c && c.id && c.id !== id && (now() - Number(c.t || 0) < STALE_MS)) {
-        // Lost ownership to a newer tab somehow -> convert this tab to tasks (no slash)
-        clearInterval(hb);
+        clearInterval(hbOwner);
         try { location.replace(TASKS_NOSLASH); } catch (_) {}
         return;
       }
@@ -81,19 +73,16 @@
         const c = read();
         if (c && c.id === id) localStorage.removeItem(KEY);
       } catch (_) {}
-      try { clearInterval(hb); } catch (_) {}
+      try { clearInterval(hbOwner); } catch (_) {}
     });
   })();
 
-  // If we were a duplicate tasks/ tab, we already redirected; stop this run.
-  if (isTasksSlash && location.href !== TASKS_SLASH) return;
-
   // ---------------------------------------------------------
-  // 0) GLOBAL TAB REGISTRY (Max3 + stale cleanup)
+  // 2) MAX 3 TABS TOTAL; OVERFLOW CLOSES SILENTLY
   // ---------------------------------------------------------
   const MAX_TABS = 3;
-  const TRACK_KEY = "AB2_GLOBAL_TABS_V4";
-  const CMD_KEY_PREFIX = "AB2_TAB_CMD_V1_";
+  const TRACK_KEY = "AB2_GLOBAL_TABS_V5";
+  const CMD_KEY_PREFIX = "AB2_TAB_CMD_V2_";
   const HEARTBEAT_MS = 2000;
   const STALE_MS = 12000;
 
@@ -109,14 +98,7 @@
     const u = toURL(urlLike);
     return !!u && u.origin === "https://worker.mturk.com" && u.pathname === "/tasks/";
   }
-  function isTasksNoSlashUrl(urlLike) {
-    const u = toURL(urlLike);
-    return !!u && u.origin === "https://worker.mturk.com" && u.pathname === "/tasks";
-  }
-  function isProjectsUrl(urlLike) {
-    const u = toURL(urlLike);
-    return !!u && u.origin === "https://worker.mturk.com" && u.pathname.startsWith("/projects/");
-  }
+
   function sortedTabs(tr) {
     return Object.entries(tr || {}).sort((a, b) => {
       const ta = Number(a[1] && (a[1].born || a[1].t || 0)) || 0;
@@ -134,18 +116,6 @@
     return out;
   }
 
-  function silentClose(reason) {
-    let tries = 0;
-    const iv = setInterval(() => {
-      tries++;
-      try { window.close(); } catch (_) {}
-      if (tries >= 6) {
-        clearInterval(iv);
-        try { location.replace("about:blank"); } catch (_) {}
-      }
-    }, 200);
-  }
-
   function sendTabCommand(targetId, action, extra = {}) {
     const cmd = { id: `${Date.now()}_${Math.random().toString(16).slice(2)}`, targetId, action, ...extra };
     if (targetId === tabId) {
@@ -158,30 +128,14 @@
   function runTabCommand(cmd) {
     if (!cmd || cmd.targetId !== tabId || !cmd.id || cmd.id === lastCmdId) return;
     lastCmdId = cmd.id;
-
-    if (cmd.action === "redirect_tasks_noslash") {
-      if (!isTasksSlashUrl(location.href) && !isTasksNoSlashUrl(location.href)) {
-        try { location.replace(TASKS_NOSLASH); } catch (_) {}
-      }
-      return;
+    if (cmd.action === "close_silent" && !isTasksSlashUrl(location.href)) {
+      silentClose(String(cmd.reason || "remote-close"));
     }
-
-    if (cmd.action === "close_silent") {
-      if (!isTasksSlashUrl(location.href)) silentClose(String(cmd.reason || "remote-close"));
-    }
-  }
-
-  function checkOwnCommand() {
-    try {
-      const cmd = safeJSONParse(localStorage.getItem(ownCmdKey) || "null");
-      runTabCommand(cmd);
-    } catch (_) {}
   }
 
   function enforceTabPolicy() {
     let state = cleanupStale(readTracker());
     const stamp = now();
-
     for (const rec of Object.values(state)) {
       if (!rec) continue;
       if (!rec.born) rec.born = Number(rec.t || stamp) || stamp;
@@ -191,23 +145,9 @@
     const ordered = sortedTabs(state);
     if (ordered.length <= MAX_TABS) return;
 
-    // If overflow is caused while on /projects/, force tab #2 to become /tasks.
-    if (isProjectsUrl(location.href)) {
-      const second = ordered[1];
-      if (second) {
-        const [sid, srec] = second;
-        if (!isTasksSlashUrl(srec.url) && !isTasksNoSlashUrl(srec.url)) {
-          sendTabCommand(sid, "redirect_tasks_noslash");
-        }
-      }
-    }
-
     const keep = new Set();
     const main = ordered.find(([, rec]) => isTasksSlashUrl(rec.url));
-    const secondTasks = ordered.find(([, rec]) => isTasksNoSlashUrl(rec.url));
-
     if (main) keep.add(main[0]);
-    if (secondTasks) keep.add(secondTasks[0]);
 
     for (const [id] of ordered) {
       if (keep.size >= MAX_TABS) break;
@@ -225,46 +165,26 @@
   }
 
   window.addEventListener("storage", (e) => {
-    if (e.key === ownCmdKey) {
-      runTabCommand(safeJSONParse(e.newValue || "null"));
-    }
+    if (e.key === ownCmdKey) runTabCommand(safeJSONParse(e.newValue || "null"));
   });
 
-  // Register this tab (including tasks/)
   let tr = cleanupStale(readTracker());
-  tr[tabId] = {
-    url: location.href,
-    t: now(),
-    born: now(),
-    isTasksSlash: isTasksSlashUrl(location.href) ? 1 : 0,
-    isTasksNoSlash: isTasksNoSlashUrl(location.href) ? 1 : 0,
-    isProjects: isProjectsUrl(location.href) ? 1 : 0
-  };
+  tr[tabId] = { url: location.href, t: now(), born: now() };
   writeTracker(tr);
   enforceTabPolicy();
 
-  // Heartbeat + cleanup
   const hb = setInterval(() => {
-    checkOwnCommand();
     let t2 = cleanupStale(readTracker());
-    if (!t2[tabId]) {
-      t2[tabId] = {
-        url: location.href,
-        t: now(),
-        born: now(),
-        isTasksSlash: isTasksSlashUrl(location.href) ? 1 : 0,
-        isTasksNoSlash: isTasksNoSlashUrl(location.href) ? 1 : 0,
-        isProjects: isProjectsUrl(location.href) ? 1 : 0
-      };
-    }
+    if (!t2[tabId]) t2[tabId] = { url: location.href, t: now(), born: now() };
     t2[tabId].t = now();
     t2[tabId].born = Number(t2[tabId].born || t2[tabId].t || now()) || now();
     t2[tabId].url = location.href;
-    t2[tabId].isTasksSlash = isTasksSlashUrl(location.href) ? 1 : 0;
-    t2[tabId].isTasksNoSlash = isTasksNoSlashUrl(location.href) ? 1 : 0;
-    t2[tabId].isProjects = isProjectsUrl(location.href) ? 1 : 0;
     writeTracker(t2);
     enforceTabPolicy();
+    try {
+      const cmd = safeJSONParse(localStorage.getItem(ownCmdKey) || "null");
+      runTabCommand(cmd);
+    } catch (_) {}
   }, HEARTBEAT_MS);
 
   window.addEventListener("beforeunload", () => {
@@ -277,11 +197,11 @@
     try { localStorage.removeItem(ownCmdKey); } catch (_) {}
   });
 
-  // ✅ NOTHING else should run on main tasks/ tab
+  // Keep main exact tasks/ tab untouched by other automation blocks.
   if (isTasksSlash) return;
 
   /* =========================================================
-     2) CLOSE IF HIT EXPIRED / UNAVAILABLE / OUT OF QUEUE / SUBMITTED
+     3) CLOSE IF HIT EXPIRED / UNAVAILABLE / OUT OF QUEUE / SUBMITTED
   ========================================================= */
   function shouldCloseExpired() {
     const text = ((document.body && document.body.innerText) || "").toLowerCase();
@@ -327,7 +247,7 @@
   setupCloseExpiredWatcher();
 
   /* =========================================================
-     3) OTHER LOGICS "AS USUAL"
+     4) OTHER LOGICS "AS USUAL"
      - CookieGuard
      - Captcha validate auto-continue (only /errors)
      - AutoFix 400/404 redirect to tasks/
@@ -608,5 +528,5 @@
   }
   setTimeout(AB2softAutoFix404, 1200);
 
-  console.log("✅ AB2soft MTurk SUBS loaded (ONLY 1x tasks/ allowed | tasks/ protected | Max3 (projects overflow => tab #2 tasks) | overflow silent close | expired close)");
+  console.log("✅ AB2soft MTurk SUBS loaded (expired close + cookie guard + captcha continue + autoFix404)");
 })();
