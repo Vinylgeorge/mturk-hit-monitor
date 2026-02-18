@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         MTurk SUBS2 
+// @name         MTurk SUBS
 // @namespace    Violentmonkey Scripts
-// @version      4.2
+// @version      4.3
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -604,5 +604,5 @@
   }
   setTimeout(AB2softAutoFix404, 1200);
 
-  console.log("✅ AB2soft MTurk SUBS loaded (ONLY 1x tasks/ allowed | tasks/ protected | Max3 | expired close | idle 1min close)");
+  console.log("✅ AB2soft MTurk SUBS loaded (ONLY 1x tasks/ allowed | tasks/ protected | Max3 (projects overflow => tab #2 tasks) | overflow silent close | expired close)");
 })();
