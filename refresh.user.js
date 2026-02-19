@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft - MTurkErrors
 // @namespace    Violentmonkey Scripts
-// @version      21
+// @version      22
 // @match        https://worker.mturk.com/*
 // @match        https://www.mturk.com/*
 // @match        https://*.mturk.com/*
@@ -143,10 +143,8 @@
   function clearPostLogin() { delSS(POSTLOGIN_KEY); }
 
   /* =========================================================
-     NEW: Protect "/tasks" (no slash) when USER opened it manually.
-     We only auto-close "/tasks" when it is clearly from auto flow:
-       - referrer is amazon signin or errors/validateCaptcha
-       - OR post-login/captcha/login flags are set recently
+     PROTECT "/tasks" (no slash) when USER opened it manually.
+     Only auto-close/redirect "/tasks" when it's auto-flow.
   ========================================================= */
   function isTasksNoSlash() {
     try { return location.hostname === "worker.mturk.com" && (location.pathname || "") === "/tasks"; }
@@ -164,18 +162,15 @@
   }
 
   function isLikelyAutoTasksNoSlash() {
-    // If any flow flags exist, treat as auto-flow result
     if (isLoginFlow()) return true;
     if (isCaptchaFlow()) return true;
     if (isPostLoginRecent(120000)) return true;
-    // Or referrer indicates auto redirect
     if (referrerLooksAutoFlow()) return true;
     return false;
   }
 
-  // ✅ If user manually opened /tasks (no slash), do NOT close it (treat it as main-like)
+  // ✅ If user manually opened /tasks, do NOT close/redirect it
   if (isTasksNoSlash() && !isLikelyAutoTasksNoSlash()) {
-    // heartbeat already running because /tasks* matched
     console.log("[AB2soft] /tasks opened manually -> protected (will not auto-close)");
     return;
   }
@@ -232,11 +227,32 @@
   setupAutoCloseSignals();
 
   /* =========================================================
-     ALWAYS-HANDLE QUEUE RESULT PAGE (FIX)
-     If "/tasks" (no slash) OR "Your HITs Queue" text:
-       - only act if it is auto-flow (NOT user manual)
-       - If tasks/ exists -> close this tab
+     Queue count parser (NEW)
+  ========================================================= */
+  function getQueueCountFromPage() {
+    const title = (document.title || "");
+    let m = title.match(/Your HITs Queue\s*\((\d+)\)/i);
+    if (m) return parseInt(m[1], 10);
+
+    const body = ((document.body && document.body.innerText) || "");
+    m = body.match(/Your HITs Queue\s*\((\d+)\)/i);
+    if (m) return parseInt(m[1], 10);
+
+    return -1; // unknown
+  }
+
+  function isQueueEmptyZero() {
+    return getQueueCountFromPage() === 0;
+  }
+
+  /* =========================================================
+     ALWAYS-HANDLE QUEUE RESULT PAGE
+     If "/tasks" OR "Your HITs Queue" text:
+       - only act if auto-flow
+       - If tasks* exists -> close this tab
        - else -> navigate to tasks/
+     EXTRA RULE:
+       - If auto-flow "/tasks" and queue is 0 and main exists -> close it
   ========================================================= */
   function isTasksQueuePage() {
     try {
@@ -260,16 +276,25 @@
   function handleQueuePageNow(where) {
     if (!isTasksQueuePage()) return false;
 
-    // ✅ NEW: Don't close/redirect if it is user-manual /tasks
-    if (isTasksNoSlash() && !isLikelyAutoTasksNoSlash()) {
-      return false;
+    // If "/tasks" is user-manual, do nothing
+    if (isTasksNoSlash() && !isLikelyAutoTasksNoSlash()) return false;
+
+    // ✅ NEW: auto-flow "/tasks" and queue is 0 -> close if main exists
+    if (isTasksNoSlash() && isLikelyAutoTasksNoSlash() && isQueueEmptyZero()) {
+      if (tasksTabExistsRecently(25000)) {
+        silentClose("auto /tasks queue=0 -> close (main exists) [" + where + "]");
+        return true;
+      }
+      // if main doesn't exist, fall through to allow becoming main
     }
 
-    if (tasksTabExistsRecently(20000)) {
+    // If main exists, close this queue tab
+    if (tasksTabExistsRecently(25000)) {
       silentClose("queue-page: tasks tab exists [" + where + "]");
       return true;
     }
 
+    // Else make this tab become the main tasks/ tab
     console.log("[AB2soft] Queue page found but no tasks/ tab detected. Going to tasks/ ... [" + where + "]");
     try { location.assign(SKIP_EXACT); } catch (_) {}
     return true;
@@ -330,7 +355,7 @@
     clearLoginFlow();
     markPostLogin();
 
-    if (tasksTabExistsRecently(20000)) {
+    if (tasksTabExistsRecently(25000)) {
       silentClose("amazon-login-cleared (tasks-tab-exists) [" + where + "]");
       return true;
     }
@@ -534,5 +559,5 @@
 
   setTimeout(startWatching, START_DELAY_MS);
 
-  console.log("✅ AB2soft MTurkErrors loaded (Protect manual /tasks + Queue auto-flow close + tasks heartbeat + Amazon signin routing + captcha close-result)");
+  console.log("✅ AB2soft MTurkErrors loaded (auto /tasks empty-queue close + manual /tasks protected + main tasks/ safe)");
 })();
