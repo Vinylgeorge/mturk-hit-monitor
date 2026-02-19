@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft - MTurkErrors
 // @namespace    Violentmonkey Scripts
-// @version      20
+// @version      21
 // @match        https://worker.mturk.com/*
 // @match        https://www.mturk.com/*
 // @match        https://*.mturk.com/*
@@ -111,7 +111,6 @@
      HARD PROTECT: exact tasks/ page does nothing except heartbeat
   ========================================================= */
   if (location.href === SKIP_EXACT) {
-    // heartbeat already running above because /tasks* matched
     return;
   }
 
@@ -142,6 +141,44 @@
     return (Date.now() - t) <= maxAgeMs;
   }
   function clearPostLogin() { delSS(POSTLOGIN_KEY); }
+
+  /* =========================================================
+     NEW: Protect "/tasks" (no slash) when USER opened it manually.
+     We only auto-close "/tasks" when it is clearly from auto flow:
+       - referrer is amazon signin or errors/validateCaptcha
+       - OR post-login/captcha/login flags are set recently
+  ========================================================= */
+  function isTasksNoSlash() {
+    try { return location.hostname === "worker.mturk.com" && (location.pathname || "") === "/tasks"; }
+    catch (_) { return false; }
+  }
+
+  function referrerLooksAutoFlow() {
+    const r = (document.referrer || "").toLowerCase();
+    if (!r) return false;
+    if (r.indexOf("amazon.com/ap/signin") !== -1) return true;
+    if (r.indexOf("/errors") !== -1) return true;
+    if (r.indexOf("validatecaptcha") !== -1) return true;
+    if (r.indexOf("opfcaptcha") !== -1) return true;
+    return false;
+  }
+
+  function isLikelyAutoTasksNoSlash() {
+    // If any flow flags exist, treat as auto-flow result
+    if (isLoginFlow()) return true;
+    if (isCaptchaFlow()) return true;
+    if (isPostLoginRecent(120000)) return true;
+    // Or referrer indicates auto redirect
+    if (referrerLooksAutoFlow()) return true;
+    return false;
+  }
+
+  // ✅ If user manually opened /tasks (no slash), do NOT close it (treat it as main-like)
+  if (isTasksNoSlash() && !isLikelyAutoTasksNoSlash()) {
+    // heartbeat already running because /tasks* matched
+    console.log("[AB2soft] /tasks opened manually -> protected (will not auto-close)");
+    return;
+  }
 
   /* =========================================================
      AUTO-CLOSE SIGNALS (legacy kept)
@@ -197,6 +234,7 @@
   /* =========================================================
      ALWAYS-HANDLE QUEUE RESULT PAGE (FIX)
      If "/tasks" (no slash) OR "Your HITs Queue" text:
+       - only act if it is auto-flow (NOT user manual)
        - If tasks/ exists -> close this tab
        - else -> navigate to tasks/
   ========================================================= */
@@ -205,7 +243,7 @@
       if (location.hostname !== "worker.mturk.com") return false;
 
       const p = (location.pathname || "");
-      if (p === "/tasks") return true; // exact queue route (no trailing slash)
+      if (p === "/tasks") return true;
 
       const title = (document.title || "");
       if (title.indexOf("Your HITs Queue") !== -1) return true;
@@ -222,6 +260,11 @@
   function handleQueuePageNow(where) {
     if (!isTasksQueuePage()) return false;
 
+    // ✅ NEW: Don't close/redirect if it is user-manual /tasks
+    if (isTasksNoSlash() && !isLikelyAutoTasksNoSlash()) {
+      return false;
+    }
+
     if (tasksTabExistsRecently(20000)) {
       silentClose("queue-page: tasks tab exists [" + where + "]");
       return true;
@@ -235,8 +278,7 @@
   if (handleQueuePageNow("page-load")) return;
 
   /* =========================================================
-     NEW RULE: Post-login close when "Your HITs Queue" text found
-     (kept, but now queue handler above makes it reliable even without flag)
+     Post-login close when "Your HITs Queue" text found (kept)
   ========================================================= */
   function hasYourHitsQueueText() {
     const t = ((document.body && document.body.innerText) || "");
@@ -288,13 +330,11 @@
     clearLoginFlow();
     markPostLogin();
 
-    // If tasks exists (any /tasks* tab heartbeat), close this tab
     if (tasksTabExistsRecently(20000)) {
       silentClose("amazon-login-cleared (tasks-tab-exists) [" + where + "]");
       return true;
     }
 
-    // Else go to tasks/
     console.log("[AB2soft] Amazon login cleared; no tasks tab detected. Navigating to tasks/ ... [" + where + "]");
     try { location.assign(SKIP_EXACT); } catch (_) {}
     return true;
@@ -494,5 +534,5 @@
 
   setTimeout(startWatching, START_DELAY_MS);
 
-  console.log("✅ AB2soft MTurkErrors loaded (Queue page fix + tasks heartbeat + Amazon signin routing + post-login close + captcha close-result)");
+  console.log("✅ AB2soft MTurkErrors loaded (Protect manual /tasks + Queue auto-flow close + tasks heartbeat + Amazon signin routing + captcha close-result)");
 })();
