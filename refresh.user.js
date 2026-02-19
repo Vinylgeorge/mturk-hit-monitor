@@ -1,36 +1,78 @@
 // ==UserScript==
 // @name         AB2soft - MTurkErrors
 // @namespace    Violentmonkey Scripts
-// @version      16
+// @version      20
 // @match        https://worker.mturk.com/*
 // @match        https://www.mturk.com/*
 // @match        https://*.mturk.com/*
+// @match        https://www.amazon.com/*
 // @match        https://*.amazon.com/*
 // @match        https://opfcaptcha.amazon.com/*
 // @grant        none
 // @run-at       document-idle
+// @updateURL    https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/refresh.user.js
+// @downloadURL  https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/refresh.user.js
 // ==/UserScript==
 
 (function () {
   'use strict';
 
-  // 🚫 HARD BLOCK: skip ONLY when URL is EXACTLY tasks/ (with trailing slash)
+  /* =========================================================
+     CONSTANTS + HEARTBEAT
+     - Heartbeat on ANY worker.mturk.com/tasks* page
+     - Exact tasks/ page remains protected (no logic)
+  ========================================================= */
   const SKIP_EXACT = "https://worker.mturk.com/tasks/";
-  if (location.href === SKIP_EXACT) return;
+  const AMAZON_SIGNIN_PREFIX = "https://www.amazon.com/ap/signin";
+  const TASKS_HEARTBEAT_KEY = "AB2_TASKS_HEARTBEAT_V2";
+
+  function setLS(k, v) { try { localStorage.setItem(k, v); } catch (_) {} }
+  function getLS(k) { try { return localStorage.getItem(k) || ""; } catch (_) { return ""; } }
+
+  function isWorkerTasksAny() {
+    try {
+      return (location.hostname === "worker.mturk.com" && (location.pathname || "").startsWith("/tasks"));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function markTasksHeartbeat() {
+    const beat = () => setLS(TASKS_HEARTBEAT_KEY, String(Date.now()));
+    beat();
+    setInterval(beat, 5000);
+  }
+
+  function tasksTabExistsRecently(maxAgeMs) {
+    const v = getLS(TASKS_HEARTBEAT_KEY);
+    const t = parseInt(v, 10);
+    if (!t || isNaN(t)) return false;
+    return (Date.now() - t) <= maxAgeMs;
+  }
+
+  function isAmazonSigninPage() {
+    return (location.href || "").startsWith(AMAZON_SIGNIN_PREFIX);
+  }
+
+  // ✅ Heartbeat on any /tasks* page (fix for tasks detection)
+  if (isWorkerTasksAny()) {
+    markTasksHeartbeat();
+  }
 
   /* =========================================================
-     Tunables (kept close to your earlier behavior)
+     CORE CONTROL FLAGS
   ========================================================= */
-  const RETRY_INTERVAL_MS = 1200;        // periodic retry (like earlier)
-  const ATTEMPT_THROTTLE_MS = 4000;      // throttle attempts (like earlier)
-  const MAX_RUNTIME_MS = 45000;          // auto-stop after 45s (prevents forever watchers)
-  const START_DELAY_MS = 200;            // small delay so React can mount
+  const RETRY_INTERVAL_MS = 1200;
+  const ATTEMPT_THROTTLE_MS = 4000;
+  const MAX_RUNTIME_MS = 45000;
+  const START_DELAY_MS = 200;
 
   let lastAttempt = 0;
   let intervalId = null;
   let observer = null;
   let hardStopTimer = null;
   let stopped = false;
+  let closeTriggered = false;
 
   function now() { return Date.now(); }
 
@@ -43,13 +85,66 @@
     console.log("[AB2soft] Stopped:", reason);
   }
 
-  // Ensure everything stops when tab closes / navigates away
   window.addEventListener("beforeunload", () => stopAll("beforeunload"));
 
+  function silentClose(reason) {
+    if (closeTriggered) return;
+    closeTriggered = true;
+
+    console.log("[AB2soft] Closing tab:", reason);
+    stopAll("closing");
+
+    let tries = 0;
+    const iv = setInterval(() => {
+      tries++;
+      try { window.close(); } catch (_) {}
+      if (tries >= 8) {
+        clearInterval(iv);
+        try { location.replace("about:blank"); } catch (_) {}
+        try { window.open("about:blank", "_self"); } catch (_) {}
+        try { window.close(); } catch (_) {}
+      }
+    }, 200);
+  }
+
   /* =========================================================
-     0) Detect “close tab” conditions (from your earlier helper style)
-        - This is OPTIONAL but you asked not to miss earlier logic.
-        - It runs only for a short time window and then stops itself.
+     HARD PROTECT: exact tasks/ page does nothing except heartbeat
+  ========================================================= */
+  if (location.href === SKIP_EXACT) {
+    // heartbeat already running above because /tasks* matched
+    return;
+  }
+
+  /* =========================================================
+     FLOW FLAGS
+  ========================================================= */
+  const CAPTCHA_FLOW_KEY = "AB2_CAPTCHA_FLOW_V1";
+  const LOGIN_FLOW_KEY   = "AB2_AMZN_SIGNIN_FLOW_V1";
+  const POSTLOGIN_KEY    = "AB2_POSTLOGIN_V1";
+
+  function setSS(k, v) { try { sessionStorage.setItem(k, v); } catch (_) {} }
+  function getSS(k) { try { return sessionStorage.getItem(k) || ""; } catch (_) { return ""; } }
+  function delSS(k) { try { sessionStorage.removeItem(k); } catch (_) {} }
+
+  function markCaptchaFlow() { setSS(CAPTCHA_FLOW_KEY, "1"); }
+  function isCaptchaFlow() { return getSS(CAPTCHA_FLOW_KEY) === "1"; }
+  function clearCaptchaFlow() { delSS(CAPTCHA_FLOW_KEY); }
+
+  function markLoginFlow() { setSS(LOGIN_FLOW_KEY, "1"); }
+  function isLoginFlow() { return getSS(LOGIN_FLOW_KEY) === "1"; }
+  function clearLoginFlow() { delSS(LOGIN_FLOW_KEY); }
+
+  function markPostLogin() { setSS(POSTLOGIN_KEY, String(Date.now())); }
+  function isPostLoginRecent(maxAgeMs) {
+    const v = getSS(POSTLOGIN_KEY);
+    const t = parseInt(v, 10);
+    if (!t || isNaN(t)) return false;
+    return (Date.now() - t) <= maxAgeMs;
+  }
+  function clearPostLogin() { delSS(POSTLOGIN_KEY); }
+
+  /* =========================================================
+     AUTO-CLOSE SIGNALS (legacy kept)
   ========================================================= */
   function setupAutoCloseSignals() {
     const closePhrases = [
@@ -59,7 +154,7 @@
       "this hit is no longer available",
       "this hit cannot be returned",
       "this hit is no longer in your hits queue",
-      "your hit submission was not successful" // you requested this
+      "your hit submission was not successful"
     ];
 
     const shouldClose = () => {
@@ -68,7 +163,6 @@
         if (bodyText.includes(p)) return true;
       }
 
-      // React alert props (MTurk uses data-react-props)
       const alertNodes = Array.from(document.querySelectorAll('div[data-react-class*="alert/Alert"]'));
       for (const node of alertNodes) {
         const props = (node.getAttribute("data-react-props") || "").toLowerCase();
@@ -82,20 +176,17 @@
     const tryClose = () => {
       if (shouldClose()) {
         console.log("[AB2soft] Close-signal detected — closing tab...");
-        try { window.close(); } catch (_) {}
+        silentClose("close-signal");
       }
     };
 
     tryClose();
 
     const mo = new MutationObserver(tryClose);
-    try {
-      mo.observe(document.documentElement || document.body, { childList: true, subtree: true, characterData: true });
-    } catch (_) {}
+    try { mo.observe(document.documentElement || document.body, { childList: true, subtree: true, characterData: true }); } catch (_) {}
 
     const iv = setInterval(tryClose, 1200);
 
-    // Don’t keep this forever
     setTimeout(() => {
       try { mo.disconnect(); } catch (_) {}
       try { clearInterval(iv); } catch (_) {}
@@ -104,32 +195,124 @@
   setupAutoCloseSignals();
 
   /* =========================================================
-     1) Error/Captcha Page Detection (more robust, like earlier)
+     ALWAYS-HANDLE QUEUE RESULT PAGE (FIX)
+     If "/tasks" (no slash) OR "Your HITs Queue" text:
+       - If tasks/ exists -> close this tab
+       - else -> navigate to tasks/
+  ========================================================= */
+  function isTasksQueuePage() {
+    try {
+      if (location.hostname !== "worker.mturk.com") return false;
+
+      const p = (location.pathname || "");
+      if (p === "/tasks") return true; // exact queue route (no trailing slash)
+
+      const title = (document.title || "");
+      if (title.indexOf("Your HITs Queue") !== -1) return true;
+
+      const body = ((document.body && document.body.innerText) || "");
+      if (body.indexOf("Your HITs Queue") !== -1) return true;
+
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function handleQueuePageNow(where) {
+    if (!isTasksQueuePage()) return false;
+
+    if (tasksTabExistsRecently(20000)) {
+      silentClose("queue-page: tasks tab exists [" + where + "]");
+      return true;
+    }
+
+    console.log("[AB2soft] Queue page found but no tasks/ tab detected. Going to tasks/ ... [" + where + "]");
+    try { location.assign(SKIP_EXACT); } catch (_) {}
+    return true;
+  }
+
+  if (handleQueuePageNow("page-load")) return;
+
+  /* =========================================================
+     NEW RULE: Post-login close when "Your HITs Queue" text found
+     (kept, but now queue handler above makes it reliable even without flag)
+  ========================================================= */
+  function hasYourHitsQueueText() {
+    const t = ((document.body && document.body.innerText) || "");
+    return t.indexOf("Your HITs Queue") !== -1;
+  }
+
+  function postLoginCloseCheck(where) {
+    if (!isPostLoginRecent(120000)) return false;
+    if (hasYourHitsQueueText()) {
+      clearPostLogin();
+      silentClose("post-login: Your HITs Queue found [" + where + "]");
+      return true;
+    }
+    return false;
+  }
+
+  if (postLoginCloseCheck("page-load")) return;
+
+  /* =========================================================
+     Error/Captcha Page Detection
   ========================================================= */
   function isErrorLikePage() {
-    // Classic MTurk errors routes
     if (location.pathname.includes("/errors")) return true;
 
-    // Validate captcha form or inputs
     if (document.querySelector('form[action*="/errors/validateCaptcha"], input[name="amzn"], input[name="amzn-r"], input[name="field-keywords"]')) {
       return true;
     }
 
-    // Amazon “Server Busy / Continue shopping”
     const title = (document.title || "").toLowerCase();
     if (title.includes("server busy")) return true;
 
     const t = ((document.body && document.body.innerText) || "").toLowerCase();
     if (t.includes("server busy") && t.includes("continue shopping")) return true;
 
-    // Sometimes captcha-like resources show up first
     if (document.querySelector('iframe[src*="captcha"], img[src*="captcha"]')) return true;
 
     return false;
   }
 
   /* =========================================================
-     2) Find validateCaptcha form + continue button (earlier robust)
+     AMAZON SIGN-IN FLOW RULE
+  ========================================================= */
+  if (isAmazonSigninPage()) markLoginFlow();
+
+  function handleAmazonSigninCleared(where) {
+    if (!isLoginFlow()) return false;
+    if (isAmazonSigninPage()) return false;
+
+    clearLoginFlow();
+    markPostLogin();
+
+    // If tasks exists (any /tasks* tab heartbeat), close this tab
+    if (tasksTabExistsRecently(20000)) {
+      silentClose("amazon-login-cleared (tasks-tab-exists) [" + where + "]");
+      return true;
+    }
+
+    // Else go to tasks/
+    console.log("[AB2soft] Amazon login cleared; no tasks tab detected. Navigating to tasks/ ... [" + where + "]");
+    try { location.assign(SKIP_EXACT); } catch (_) {}
+    return true;
+  }
+
+  if (handleAmazonSigninCleared("page-load")) return;
+
+  /* =========================================================
+     CAPTCHA CLEARED => CLOSE RESULT PAGE
+  ========================================================= */
+  if (isCaptchaFlow() && !isErrorLikePage()) {
+    clearCaptchaFlow();
+    silentClose("captcha-cleared-result (page-load)");
+    return;
+  }
+
+  /* =========================================================
+     validateCaptcha form + continue button
   ========================================================= */
   function findValidateForm() {
     const f1 = document.querySelector('form[action*="/errors/validateCaptcha"]');
@@ -174,7 +357,6 @@
       if (text.includes("continue") || text.includes("continue shopping")) return el;
     }
 
-    // Amazon UI primary button patterns (earlier style)
     const prim = document.querySelector(
       '.a-button .a-button-text, .a-button-primary .a-button-text, .a-button-inner button'
     );
@@ -186,12 +368,12 @@
       if (!el) return false;
       el.focus && el.focus();
       const types = ["mouseover","pointerover","mousemove","mousedown","pointerdown","mouseup","pointerup","click"];
-      for (const t of types) {
-        try { el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })); } catch (_) {}
+      for (const tt of types) {
+        try { el.dispatchEvent(new MouseEvent(tt, { bubbles: true, cancelable: true, view: window })); } catch (_) {}
       }
       try { el.click(); } catch (_) {}
       return true;
-    } catch (e) {
+    } catch (_) {
       return false;
     }
   }
@@ -209,24 +391,29 @@
   }
 
   /* =========================================================
-     3) Attempt Logic (same strategy as earlier)
-        - Throttled
-        - Tries best method (direct redirect)
-        - Falls back to click/submit
+     Attempt Logic
   ========================================================= */
   function attemptOnce() {
     if (stopped) return;
 
-    // If we navigated to tasks/ after something, still enforce skip
+    if (handleQueuePageNow("attemptOnce")) return;
+    if (handleAmazonSigninCleared("attemptOnce")) return;
+    if (postLoginCloseCheck("attemptOnce")) return;
+
     if (location.href === SKIP_EXACT) {
       stopAll("navigated-to-skip-url");
+      return;
+    }
+
+    if (isCaptchaFlow() && !isErrorLikePage()) {
+      clearCaptchaFlow();
+      silentClose("captcha-cleared-result");
       return;
     }
 
     if (now() - lastAttempt < ATTEMPT_THROTTLE_MS) return;
     lastAttempt = now();
 
-    // If page no longer looks like error/captcha, stop watching
     if (!isErrorLikePage()) {
       stopAll("page-not-error-anymore");
       return;
@@ -235,57 +422,47 @@
     const form = findValidateForm();
     const btn = findContinueButton(form);
 
-    if (!form && !btn) {
-      // keep watching; page may render late
-      return;
-    }
+    if (!form && !btn) return;
 
-    // ⭐ BEST: Direct redirect using hidden fields
     const validateUrl = buildValidateUrl(form);
     if (validateUrl && redirectOnce(validateUrl)) {
-      // navigation will happen; stop watchers cleanly
       stopAll("redirected-validate");
       return;
     }
 
-    // Fallback: click continue / submit
     try {
       if (btn) {
         synthClick(btn);
         console.log("[AB2soft] Continue clicked");
-        // do NOT stop immediately: sometimes click triggers async render; keep watching a bit
         return;
       }
       if (form) {
-        try { form.submit(); } catch (_) { /* ignore */ }
+        try { form.submit(); } catch (_) {}
         console.log("[AB2soft] Form submitted");
         return;
       }
-    } catch (e) {
-      // keep watching
-    }
+    } catch (_) {}
   }
 
   /* =========================================================
-     4) Start Watching (like earlier) — but only when needed
-        - Observer + interval
-        - Hard timeout to prevent forever background usage
+     Start Watching (only when error-like)
   ========================================================= */
   function startWatching() {
     if (stopped) return;
 
-    // If not an error page now, do nothing (no watchers)
+    if (handleQueuePageNow("startWatching")) return;
+    if (handleAmazonSigninCleared("startWatching")) return;
+    if (postLoginCloseCheck("startWatching")) return;
+
     if (!isErrorLikePage()) return;
 
+    markCaptchaFlow();
     console.log("[AB2soft] Watching started (error-like page detected)");
 
-    // Hard stop (safety)
     hardStopTimer = setTimeout(() => stopAll("max-runtime-reached"), MAX_RUNTIME_MS);
 
-    // First attempt immediately
     attemptOnce();
 
-    // Mutation observer (captures late DOM / React)
     try {
       observer = new MutationObserver(() => attemptOnce());
       observer.observe(document.documentElement || document.body, {
@@ -296,20 +473,26 @@
       });
     } catch (_) {}
 
-    // Periodic retry
     intervalId = setInterval(() => {
-      // Stop if page is no longer error-like
+      if (handleQueuePageNow("interval")) return;
+      if (handleAmazonSigninCleared("interval")) return;
+      if (postLoginCloseCheck("interval")) return;
+
       if (!isErrorLikePage()) {
+        if (isCaptchaFlow()) {
+          clearCaptchaFlow();
+          silentClose("captcha-cleared-result (interval)");
+          return;
+        }
         stopAll("interval-detected-resolved");
         return;
       }
+
       attemptOnce();
     }, RETRY_INTERVAL_MS);
   }
 
-  // ✅ “Whenever new tab opens” → this code runs on page load of that tab
-  // We delay a tiny bit so late-loaded elements appear, but we still watch like earlier.
   setTimeout(startWatching, START_DELAY_MS);
 
-  console.log("✅ AB2soft MTurkErrors loaded (Full watch + AutoStop + Skip only tasks/)");
+  console.log("✅ AB2soft MTurkErrors loaded (Queue page fix + tasks heartbeat + Amazon signin routing + post-login close + captcha close-result)");
 })();
