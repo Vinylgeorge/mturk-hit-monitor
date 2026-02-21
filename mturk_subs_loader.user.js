@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         MTurk SUBS 
+// @name         MTurk SUBS
 // @namespace    Violentmonkey Scripts
-// @version      4.5
+// @version      4.6
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -24,21 +24,22 @@
 
   function now() { return Date.now(); }
 
+  // ✅ UPDATED: removed about:blank redirection completely
   function silentClose(reason) {
     let tries = 0;
     const iv = setInterval(() => {
       tries++;
       try { window.close(); } catch (_) {}
-      if (tries >= 6) {
+      if (tries >= 10) {
         clearInterval(iv);
-        try { location.replace("about:blank"); } catch (_) {}
+        // No about:blank redirect (as requested)
       }
     }, 200);
   }
 
   // ---------------------------------------------------------
   // 1) ONLY ONE EXACT tasks/ OWNER
-  //    Duplicate exact tasks/ tabs are converted to tasks
+  //    Duplicate exact tasks/ tabs are converted to tasks (no slash)
   // ---------------------------------------------------------
   (function enforceSingleTasksSlash() {
     if (!isTasksSlash) return;
@@ -53,6 +54,7 @@
 
     const cur = read();
     if (cur && cur.id && cur.id !== id && (now() - Number(cur.t || 0) < STALE_MS)) {
+      // ✅ keep this redirect (NOT about:blank). This is your duplicate tasks/ control.
       try { location.replace(TASKS_NOSLASH); } catch (_) {}
       return;
     }
@@ -78,124 +80,12 @@
   })();
 
   // ---------------------------------------------------------
+  // ✅ REMOVED COMPLETELY:
   // 2) MAX 3 TABS TOTAL; OVERFLOW CLOSES SILENTLY
+  // - tracker key AB2_GLOBAL_TABS_V5
+  // - command keys AB2_TAB_CMD_V2_*
+  // - heartbeat and storage command listener
   // ---------------------------------------------------------
-  const MAX_TABS = 3;
-  const TRACK_KEY = "AB2_GLOBAL_TABS_V5";
-  const CMD_KEY_PREFIX = "AB2_TAB_CMD_V2_";
-  const HEARTBEAT_MS = 2000;
-  const STALE_MS = 12000;
-
-  const tabId = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  const ownCmdKey = `${CMD_KEY_PREFIX}${tabId}`;
-  let lastCmdId = "";
-
-  function safeJSONParse(s) { try { return JSON.parse(s); } catch (_) { return null; } }
-  function readTracker() { return safeJSONParse(localStorage.getItem(TRACK_KEY) || "{}") || {}; }
-  function writeTracker(m) { try { localStorage.setItem(TRACK_KEY, JSON.stringify(m)); } catch (_) {} }
-  function toURL(urlLike) { try { return new URL(urlLike, location.origin); } catch (_) { return null; } }
-  function isTasksSlashUrl(urlLike) {
-    const u = toURL(urlLike);
-    return !!u && u.origin === "https://worker.mturk.com" && u.pathname === "/tasks/";
-  }
-
-  function sortedTabs(tr) {
-    return Object.entries(tr || {}).sort((a, b) => {
-      const ta = Number(a[1] && (a[1].born || a[1].t || 0)) || 0;
-      const tb = Number(b[1] && (b[1].born || b[1].t || 0)) || 0;
-      return ta - tb;
-    });
-  }
-
-  function cleanupStale(tr) {
-    const out = tr || {};
-    const t = now();
-    for (const [id, rec] of Object.entries(out)) {
-      if (!rec || !rec.t || (t - rec.t > STALE_MS)) delete out[id];
-    }
-    return out;
-  }
-
-  function sendTabCommand(targetId, action, extra = {}) {
-    const cmd = { id: `${Date.now()}_${Math.random().toString(16).slice(2)}`, targetId, action, ...extra };
-    if (targetId === tabId) {
-      runTabCommand(cmd);
-      return;
-    }
-    try { localStorage.setItem(`${CMD_KEY_PREFIX}${targetId}`, JSON.stringify(cmd)); } catch (_) {}
-  }
-
-  function runTabCommand(cmd) {
-    if (!cmd || cmd.targetId !== tabId || !cmd.id || cmd.id === lastCmdId) return;
-    lastCmdId = cmd.id;
-    if (cmd.action === "close_silent" && !isTasksSlashUrl(location.href)) {
-      silentClose(String(cmd.reason || "remote-close"));
-    }
-  }
-
-  function enforceTabPolicy() {
-    let state = cleanupStale(readTracker());
-    const stamp = now();
-    for (const rec of Object.values(state)) {
-      if (!rec) continue;
-      if (!rec.born) rec.born = Number(rec.t || stamp) || stamp;
-    }
-    writeTracker(state);
-
-    const ordered = sortedTabs(state);
-    if (ordered.length <= MAX_TABS) return;
-
-    const keep = new Set();
-    const main = ordered.find(([, rec]) => isTasksSlashUrl(rec.url));
-    if (main) keep.add(main[0]);
-
-    for (const [id] of ordered) {
-      if (keep.size >= MAX_TABS) break;
-      keep.add(id);
-    }
-
-    for (const [id] of ordered) {
-      if (keep.has(id)) continue;
-      if (id === tabId) {
-        silentClose(`max-tabs-exceeded count=${ordered.length} max=${MAX_TABS}`);
-        return;
-      }
-      sendTabCommand(id, "close_silent", { reason: `max-tabs-exceeded count=${ordered.length} max=${MAX_TABS}` });
-    }
-  }
-
-  window.addEventListener("storage", (e) => {
-    if (e.key === ownCmdKey) runTabCommand(safeJSONParse(e.newValue || "null"));
-  });
-
-  let tr = cleanupStale(readTracker());
-  tr[tabId] = { url: location.href, t: now(), born: now() };
-  writeTracker(tr);
-  enforceTabPolicy();
-
-  const hb = setInterval(() => {
-    let t2 = cleanupStale(readTracker());
-    if (!t2[tabId]) t2[tabId] = { url: location.href, t: now(), born: now() };
-    t2[tabId].t = now();
-    t2[tabId].born = Number(t2[tabId].born || t2[tabId].t || now()) || now();
-    t2[tabId].url = location.href;
-    writeTracker(t2);
-    enforceTabPolicy();
-    try {
-      const cmd = safeJSONParse(localStorage.getItem(ownCmdKey) || "null");
-      runTabCommand(cmd);
-    } catch (_) {}
-  }, HEARTBEAT_MS);
-
-  window.addEventListener("beforeunload", () => {
-    try { clearInterval(hb); } catch (_) {}
-    try {
-      let t3 = cleanupStale(readTracker());
-      delete t3[tabId];
-      writeTracker(t3);
-    } catch (_) {}
-    try { localStorage.removeItem(ownCmdKey); } catch (_) {}
-  });
 
   // Keep main exact tasks/ tab untouched by other automation blocks.
   if (isTasksSlash) return;
@@ -238,7 +128,6 @@
     try { mo.observe(document.documentElement || document.body, { childList: true, subtree: true, characterData: true }); } catch (_) {}
     const iv = setInterval(tryClose, 1200);
 
-    // Keep watching for the full tab lifetime so long-duration HITs are still caught.
     window.addEventListener("beforeunload", () => {
       try { mo.disconnect(); } catch (_) {}
       try { clearInterval(iv); } catch (_) {}
@@ -487,6 +376,7 @@
 
   // --------------------------
   // AutoFix 400/404 -> redirect to tasks/
+  // (kept - NOT about:blank)
   // --------------------------
   function AB2softAutoFix404() {
     const bodyText = (document.body && document.body.innerText) ? document.body.innerText : "";
@@ -528,5 +418,5 @@
   }
   setTimeout(AB2softAutoFix404, 1200);
 
-  console.log("✅ AB2soft MTurk SUBS loaded (expired close + cookie guard + captcha continue + autoFix404)");
+  console.log("✅ AB2soft MTurk SUBS loaded (NO about:blank redirects; NO max-tab limiter; expired close + cookie guard + captcha continue + autoFix404)");
 })();
