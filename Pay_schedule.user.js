@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      5.2
+// @version     6.0
 // @description  Final merged logic with trigger-lock, cycle updates, bank selection, submit redirect, and earnings-page return
 // @match        https://worker.mturk.com/earnings*
 // @match        https://worker.mturk.com/payment_schedule*
@@ -19,7 +19,12 @@
     autoClickUpdate: true,
     redirectDelayMs: 1200,
     submitDelayMs: 1500,
-    afterSubmitDelayMs: 1800,
+    submitRetryDelayMs: 2200,
+    maxSubmitAttempts: 2,
+    confirmDelayMs: 500,
+    confirmRetryDelayMs: 2200,
+    maxConfirmAttempts: 2,
+    afterSubmitDelayMs: 6500,
 
     stateKey: 'ab2soft_cycle_manager_v5_state',
     lockKey: 'ab2soft_cycle_manager_v5_lock',
@@ -244,8 +249,9 @@
   }
 
   function shouldBlockRetrigger(lockState, current, caseId = null) {
-    if (caseId != null && SINGLE_TRIGGER_CASES.has(caseId) && hasCaseTriggeredOnce(caseId)) {
-      return true;
+    if (caseId != null && SINGLE_TRIGGER_CASES.has(caseId)) {
+      // For cases 3/4/5/6 use strict per-case one-time memory only.
+      return hasCaseTriggeredOnce(caseId);
     }
 
     if (!lockState || !lockState.locked) return false;
@@ -323,6 +329,67 @@
     return true;
   }
 
+  function submitUpdateWithRetry(attempt = 1) {
+    const clicked = clickUpdate();
+    if (!clicked) {
+      showBanner('Could not click Update.', '#c62828');
+      return;
+    }
+
+    if (attempt >= CONFIG.maxSubmitAttempts) return;
+
+    setTimeout(() => {
+      // If we are still on the payment schedule page, the first click likely did not submit.
+      if (isPaymentSchedulePage()) {
+        showBanner(`Update did not submit. Retrying (${attempt + 1}/${CONFIG.maxSubmitAttempts})...`, '#ef6c00');
+        submitUpdateWithRetry(attempt + 1);
+      }
+    }, CONFIG.submitRetryDelayMs);
+  }
+
+  function getConfirmButton() {
+    return (
+      qs('a[data-method="put"][href*="/payment_schedule/confirm"]') ||
+      qs('a.btn.btn-primary[href*="/payment_schedule/confirm"]') ||
+      qs('a[href*="/payment_schedule/confirm"]')
+    );
+  }
+
+  function clickConfirm() {
+    const btn = getConfirmButton();
+    if (!btn) {
+      log('Confirm button not found on submit page.');
+      return false;
+    }
+
+    btn.click();
+    return true;
+  }
+
+  function confirmWithRetry(caseId, attempt = 1) {
+    const clicked = clickConfirm();
+    if (!clicked) {
+      if (attempt === 1) {
+        showBanner('Confirm button not found on submit page.', '#c62828');
+      }
+      return;
+    }
+
+    if (SINGLE_TRIGGER_CASES.has(caseId)) {
+      markCaseTriggeredOnce(caseId);
+    }
+
+    if (attempt >= CONFIG.maxConfirmAttempts) return;
+
+    setTimeout(() => {
+      // If still on submit page, confirmation likely did not complete yet.
+      if (isSubmitPage()) {
+        showBanner(`Confirm did not complete. Retrying (${attempt + 1}/${CONFIG.maxConfirmAttempts})...`, '#ef6c00');
+        confirmWithRetry(caseId, attempt + 1);
+      }
+    }, CONFIG.confirmRetryDelayMs);
+  }
+
   function openPaymentScheduleWithState(state, message) {
     saveState(state);
     showBanner(message, '#ef6c00');
@@ -376,7 +443,6 @@
       if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 6)) {
         return { action: 'blocked_repeat', caseId: 6, reason: 'case 6 already triggered once' };
       }
-      markCaseTriggeredOnce(6);
       saveTriggerLock(6, factorKey, current.transferDateYMD, current.earnings);
       return { action: 'increase_one_step', caseId: 6, reason: 'earnings < 8, one day before transfer, <3 days left' };
     }
@@ -387,7 +453,6 @@
       if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 3)) {
         return { action: 'blocked_repeat', caseId: 3, reason: 'case 3 already triggered once' };
       }
-      markCaseTriggeredOnce(3);
       saveTriggerLock(3, factorKey, current.transferDateYMD, current.earnings);
       return { action: 'decrease_one_step_then_validate_5th', caseId: 3, reason: 'earnings < 20, one day before, >=7 days left' };
     }
@@ -398,7 +463,6 @@
       if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 4)) {
         return { action: 'blocked_repeat', caseId: 4, reason: 'case 4 already triggered once' };
       }
-      markCaseTriggeredOnce(4);
       saveTriggerLock(4, factorKey, current.transferDateYMD, current.earnings);
       return { action: 'set_cycle_3', caseId: 4, reason: 'earnings < 20, not one day before, <7 days left' };
     }
@@ -474,6 +538,11 @@
       return;
     }
 
+    if (state.phase === 'verify_on_earnings') {
+      showBanner('Verification phase active. Skipping payment schedule action.', '#6c757d');
+      return;
+    }
+
     const selectedCycle = getSelectedCycle();
     if (!selectedCycle) {
       showBanner('Could not detect selected cycle.', '#c62828');
@@ -538,10 +607,7 @@
 
     if (CONFIG.autoClickUpdate) {
       setTimeout(() => {
-        const clicked = clickUpdate();
-        if (!clicked) {
-          showBanner('Could not click Update.', '#c62828');
-        }
+        submitUpdateWithRetry(1);
       }, CONFIG.submitDelayMs);
     }
   }
@@ -555,15 +621,22 @@
 
     log('Submit page', state);
 
-    showBanner('Submit complete. Redirecting to earnings page...', '#2e7d32');
-
     saveState({
       ...state,
       phase: 'verify_on_earnings'
     });
 
+    showBanner('Submit page reached. Clicking Confirm...', '#1565c0');
+
     setTimeout(() => {
-      location.href = '/earnings';
+      confirmWithRetry(state.caseId, 1);
+    }, CONFIG.confirmDelayMs);
+
+    setTimeout(() => {
+      if (isSubmitPage()) {
+        showBanner('Still on submit page. Redirecting to earnings...', '#ef6c00');
+        location.href = '/earnings';
+      }
     }, CONFIG.afterSubmitDelayMs);
   }
 
