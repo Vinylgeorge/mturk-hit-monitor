@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      5.1
+// @version      5.2
 // @description  Final merged logic with trigger-lock, cycle updates, bank selection, submit redirect, and earnings-page return
 // @match        https://worker.mturk.com/earnings*
 // @match        https://worker.mturk.com/payment_schedule*
@@ -23,6 +23,7 @@
 
     stateKey: 'ab2soft_cycle_manager_v5_state',
     lockKey: 'ab2soft_cycle_manager_v5_lock',
+    caseHistoryKey: 'ab2soft_cycle_manager_v5_case_history',
 
     downCycleMap: {
       30: 14,
@@ -51,6 +52,8 @@
     LT3: 'lt3days',
     DAY_BEFORE: 'day_before_transfer'
   };
+
+  const SINGLE_TRIGGER_CASES = new Set([3, 4, 5, 6]);
 
   function log(...args) {
     if (CONFIG.debug) console.log('[AB2soft]', ...args);
@@ -104,6 +107,33 @@
 
   function clearState() {
     localStorage.removeItem(CONFIG.stateKey);
+  }
+
+  function loadCaseHistory() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(CONFIG.caseHistoryKey) || '[]');
+      if (!Array.isArray(raw)) return [];
+      return raw.filter((v) => Number.isInteger(v));
+    } catch {
+      return [];
+    }
+  }
+
+  function saveCaseHistory(cases) {
+    localStorage.setItem(CONFIG.caseHistoryKey, JSON.stringify(cases));
+  }
+
+  function hasCaseTriggeredOnce(caseId) {
+    return loadCaseHistory().includes(caseId);
+  }
+
+  function markCaseTriggeredOnce(caseId) {
+    if (!SINGLE_TRIGGER_CASES.has(caseId)) return;
+    const history = loadCaseHistory();
+    if (history.includes(caseId)) return;
+    history.push(caseId);
+    saveCaseHistory(history);
+    log('Case marked as triggered once:', caseId, history);
   }
 
   function saveTriggerLock(caseId, factorKey, transferDateYMD, earnings) {
@@ -213,7 +243,11 @@
     return null;
   }
 
-  function shouldBlockRetrigger(lockState, current) {
+  function shouldBlockRetrigger(lockState, current, caseId = null) {
+    if (caseId != null && SINGLE_TRIGGER_CASES.has(caseId) && hasCaseTriggeredOnce(caseId)) {
+      return true;
+    }
+
     if (!lockState || !lockState.locked) return false;
 
     if (current.earnings >= 20) return false;
@@ -328,9 +362,10 @@
     // 5. earning >=8 and one day before transfer date and <3 days to last date -> do nothing
     if (current.earnings >= 8 && current.isOneDayBeforeTransfer && current.daysToLastDate < 3) {
       const factorKey = FACTORS.LT3;
-      if (shouldBlockRetrigger(lockState, { ...current, factorKey })) {
-        return { action: 'blocked_repeat', caseId: 5, reason: 'case 5 blocked by same date factor' };
+      if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 5)) {
+        return { action: 'blocked_repeat', caseId: 5, reason: 'case 5 already triggered once' };
       }
+      markCaseTriggeredOnce(5);
       saveTriggerLock(5, factorKey, current.transferDateYMD, current.earnings);
       return { action: 'do_nothing', caseId: 5, reason: 'earnings >= 8, one day before transfer, <3 days left' };
     }
@@ -338,9 +373,10 @@
     // 6. earning <8 and one day before transfer date and <3 days to last date -> increase one step
     if (current.earnings < 8 && current.isOneDayBeforeTransfer && current.daysToLastDate < 3) {
       const factorKey = FACTORS.LT3;
-      if (shouldBlockRetrigger(lockState, { ...current, factorKey })) {
-        return { action: 'blocked_repeat', caseId: 6, reason: 'case 6 blocked by same date factor' };
+      if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 6)) {
+        return { action: 'blocked_repeat', caseId: 6, reason: 'case 6 already triggered once' };
       }
+      markCaseTriggeredOnce(6);
       saveTriggerLock(6, factorKey, current.transferDateYMD, current.earnings);
       return { action: 'increase_one_step', caseId: 6, reason: 'earnings < 8, one day before transfer, <3 days left' };
     }
@@ -348,9 +384,10 @@
     // 3. earnings <20 and one day before transfer date and >=7 days left -> one step down, then validate within 5th
     if (current.earnings < 20 && current.isOneDayBeforeTransfer && current.daysToLastDate >= 7) {
       const factorKey = FACTORS.DAY_BEFORE;
-      if (shouldBlockRetrigger(lockState, { ...current, factorKey })) {
-        return { action: 'blocked_repeat', caseId: 3, reason: 'case 3 blocked by same date factor' };
+      if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 3)) {
+        return { action: 'blocked_repeat', caseId: 3, reason: 'case 3 already triggered once' };
       }
+      markCaseTriggeredOnce(3);
       saveTriggerLock(3, factorKey, current.transferDateYMD, current.earnings);
       return { action: 'decrease_one_step_then_validate_5th', caseId: 3, reason: 'earnings < 20, one day before, >=7 days left' };
     }
@@ -358,9 +395,10 @@
     // 4. earnings <20 and not one day before transfer date and <7 days left -> set cycle 3
     if (current.earnings < 20 && !current.isOneDayBeforeTransfer && current.daysToLastDate < 7) {
       const factorKey = FACTORS.LT7;
-      if (shouldBlockRetrigger(lockState, { ...current, factorKey })) {
-        return { action: 'blocked_repeat', caseId: 4, reason: 'case 4 blocked by same date factor' };
+      if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 4)) {
+        return { action: 'blocked_repeat', caseId: 4, reason: 'case 4 already triggered once' };
       }
+      markCaseTriggeredOnce(4);
       saveTriggerLock(4, factorKey, current.transferDateYMD, current.earnings);
       return { action: 'set_cycle_3', caseId: 4, reason: 'earnings < 20, not one day before, <7 days left' };
     }
