@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      5.0
+// @version      5.1
 // @description  Final merged logic with trigger-lock, cycle updates, bank selection, submit redirect, and earnings-page return
 // @match        https://worker.mturk.com/earnings*
 // @match        https://worker.mturk.com/payment_schedule*
