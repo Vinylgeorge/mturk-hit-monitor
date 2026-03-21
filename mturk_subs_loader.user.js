@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MTurk SUBS
 // @namespace    Violentmonkey Scripts
-// @version      4.6
+// @version      4.7
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -41,43 +41,24 @@
   // 1) ONLY ONE EXACT tasks/ OWNER
   //    Duplicate exact tasks/ tabs are converted to tasks (no slash)
   // ---------------------------------------------------------
-  (function enforceSingleTasksSlash() {
-    if (!isTasksSlash) return;
+ (function enforceSingleTasksSlash() {
+  if (location.pathname !== "/tasks/") return;
 
-    const KEY = "AB2_TASKS_SLASH_OWNER_V1";
-    const STALE_MS = 12000;
-    const HEARTBEAT_MS = 3000;
-    const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const KEY = "AB2_TASKS_OPEN";
 
-    function read() { try { return JSON.parse(localStorage.getItem(KEY) || "null"); } catch (_) { return null; } }
-    function write() { try { localStorage.setItem(KEY, JSON.stringify({ id, t: now() })); } catch (_) {} }
+  if (localStorage.getItem(KEY)) {
+    // Another tab already opened /tasks/
+    location.replace("https://worker.mturk.com/tasks");
+    return;
+  }
 
-    const cur = read();
-    if (cur && cur.id && cur.id !== id && (now() - Number(cur.t || 0) < STALE_MS)) {
-      // ✅ keep this redirect (NOT about:blank). This is your duplicate tasks/ control.
-      try { location.replace(TASKS_NOSLASH); } catch (_) {}
-      return;
-    }
+  // Mark this tab as owner
+  localStorage.setItem(KEY, "1");
 
-    write();
-    const hbOwner = setInterval(() => {
-      const c = read();
-      if (c && c.id && c.id !== id && (now() - Number(c.t || 0) < STALE_MS)) {
-        clearInterval(hbOwner);
-        try { location.replace(TASKS_NOSLASH); } catch (_) {}
-        return;
-      }
-      write();
-    }, HEARTBEAT_MS);
-
-    window.addEventListener("beforeunload", () => {
-      try {
-        const c = read();
-        if (c && c.id === id) localStorage.removeItem(KEY);
-      } catch (_) {}
-      try { clearInterval(hbOwner); } catch (_) {}
-    });
-  })();
+  window.addEventListener("beforeunload", () => {
+    localStorage.removeItem(KEY);
+  });
+})();
 
   // ---------------------------------------------------------
   // ✅ REMOVED COMPLETELY:
