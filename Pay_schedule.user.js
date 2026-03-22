@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version     6.3
+// @version     6.4
 // @description  Final merged logic with trigger-lock, cycle updates, bank selection, submit redirect, and earnings-page return
 // @match        https://worker.mturk.com/earnings*
 // @match        https://worker.mturk.com/payment_schedule*
@@ -57,24 +57,7 @@
     LT3: 'lt3days',
     DAY_BEFORE: 'day_before_transfer'
   };
-function getPDTDate() {
-  const now = new Date();
 
-  // Convert to PDT using locale
-  const pdtString = now.toLocaleString("en-US", {
-    timeZone: "America/Los_Angeles"
-  });
-
-  const pdt = new Date(pdtString);
-  pdt.setHours(0, 0, 0, 0);
-  return pdt;
-}
-
-function getTomorrowPDT() {
-  const d = getPDTDate();
-  d.setDate(d.getDate() + 1);
-  return d;
-}
   const SINGLE_TRIGGER_CASES = new Set([3, 4, 5, 6]);
 
   function log(...args) {
@@ -191,12 +174,21 @@ function getTomorrowPDT() {
     return d.toISOString().slice(0, 10);
   }
 
-
+  function today() {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
 
   function todayYMD() {
     return formatYMD(today());
   }
 
+  function tomorrow() {
+    const d = today();
+    d.setDate(d.getDate() + 1);
+    return d;
+  }
 
   function addDays(baseDate, days) {
     const d = new Date(baseDate);
@@ -210,7 +202,7 @@ function getTomorrowPDT() {
   }
 
   function isOneDayBeforeTransfer(transferDate) {
-    return formatYMD(transferDate) === formatYMD(getTomorrowPDT());
+    return formatYMD(transferDate) === formatYMD(tomorrow());
   }
 
   function parseMoney(text) {
