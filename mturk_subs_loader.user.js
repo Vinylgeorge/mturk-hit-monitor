@@ -44,24 +44,27 @@
  (function enforceSingleTasksSlash() {
   const TASKS_NOSLASH = "https://worker.mturk.com/tasks";
   const KEY = "AB2_TASKS_SLASH_LOCK";
+  const STALE_MS = 15000;
+  const now = Date.now();
 
-  // Only act on /tasks/
   if (location.pathname !== "/tasks/") return;
 
-  // Another /tasks/ tab already exists
-  if (localStorage.getItem(KEY) === "1") {
+  let lock = null;
+  try {
+    lock = JSON.parse(localStorage.getItem(KEY) || "null");
+  } catch (_) {}
+
+  if (lock && now - lock.t < STALE_MS) {
     location.replace(TASKS_NOSLASH);
     return;
   }
 
-  // This tab becomes the only /tasks/ tab
-  localStorage.setItem(KEY, "1");
+  localStorage.setItem(KEY, JSON.stringify({ t: now }));
 
   window.addEventListener("beforeunload", () => {
     localStorage.removeItem(KEY);
   });
 })();
-
   // ---------------------------------------------------------
   // ✅ REMOVED COMPLETELY:
   // 2) MAX 3 TABS TOTAL; OVERFLOW CLOSES SILENTLY
