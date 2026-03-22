@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version     6.2
+// @version     6.3
 // @description  Final merged logic with trigger-lock, cycle updates, bank selection, submit redirect, and earnings-page return
 // @match        https://worker.mturk.com/earnings*
 // @match        https://worker.mturk.com/payment_schedule*
@@ -57,7 +57,7 @@
     LT3: 'lt3days',
     DAY_BEFORE: 'day_before_transfer'
   };
-function getPDTDate() {tda
+function getPDTDate() {
   const now = new Date();
 
   // Convert to PDT using locale
