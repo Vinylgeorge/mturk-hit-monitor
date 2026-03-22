@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MTurk SUBS
 // @namespace    Violentmonkey Scripts
-// @version      4.8
+// @version      4.9
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -15,7 +15,7 @@
 // @downloadURL  https://raw.githubusercontent.com/Vinylgeorge/mturk-hit-monitor/refs/heads/main/mturk_subs_loader.user.js
 // ==/UserScript==
 
-(function () {
+ (function () {
   'use strict';
 
   const TASKS_SLASH = "https://worker.mturk.com/tasks/";
