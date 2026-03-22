@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MTurk SUBS
 // @namespace    Violentmonkey Scripts
-// @version      4.9
+// @version      5
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -44,23 +44,20 @@
  (function enforceSingleTasksSlash() {
   const TASKS_NOSLASH = "https://worker.mturk.com/tasks";
   const KEY = "AB2_TASKS_SLASH_LOCK";
-  const STALE_MS = 15000;
-  const now = Date.now();
 
+  // Only run on exact /tasks/
   if (location.pathname !== "/tasks/") return;
 
-  let lock = null;
-  try {
-    lock = JSON.parse(localStorage.getItem(KEY) || "null");
-  } catch (_) {}
-
-  if (lock && now - lock.t < STALE_MS) {
+  // If a /tasks/ tab is already open, redirect this new tab only once
+  if (localStorage.getItem(KEY) === "1") {
     location.replace(TASKS_NOSLASH);
     return;
   }
 
-  localStorage.setItem(KEY, JSON.stringify({ t: now }));
+  // Mark this tab as the one allowed /tasks/ tab
+  localStorage.setItem(KEY, "1");
 
+  // Remove lock when this tab leaves
   window.addEventListener("beforeunload", () => {
     localStorage.removeItem(KEY);
   });
