@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MTurk SUBS
 // @namespace    Violentmonkey Scripts
-// @version      4.7
+// @version      4.8
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -42,17 +42,19 @@
   //    Duplicate exact tasks/ tabs are converted to tasks (no slash)
   // ---------------------------------------------------------
  (function enforceSingleTasksSlash() {
+  const TASKS_NOSLASH = "https://worker.mturk.com/tasks";
+  const KEY = "AB2_TASKS_SLASH_LOCK";
+
+  // Only act on /tasks/
   if (location.pathname !== "/tasks/") return;
 
-  const KEY = "AB2_TASKS_OPEN";
-
-  if (localStorage.getItem(KEY)) {
-    // Another tab already opened /tasks/
-    location.replace("https://worker.mturk.com/tasks");
+  // Another /tasks/ tab already exists
+  if (localStorage.getItem(KEY) === "1") {
+    location.replace(TASKS_NOSLASH);
     return;
   }
 
-  // Mark this tab as owner
+  // This tab becomes the only /tasks/ tab
   localStorage.setItem(KEY, "1");
 
   window.addEventListener("beforeunload", () => {
