@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      6.6
-// @description  MTurk payment cycle manager with trigger-lock, boundary correction, forced earnings-page verification, and cycle-down targeting
+// @version      6.7
+// @description  MTurk payment cycle manager with trigger-lock, corrected boundary logic, forced earnings-page verification, and cycle updates
 // @match        https://worker.mturk.com/earnings*
 // @match        https://worker.mturk.com/payment_schedule*
 // @match        https://worker.mturk.com/payment_schedule/submit*
@@ -26,9 +26,9 @@
     maxConfirmAttempts: 2,
     afterSubmitDelayMs: 6500,
 
-    stateKey: 'ab2soft_cycle_manager_v64_state',
-    lockKey: 'ab2soft_cycle_manager_v64_lock',
-    caseHistoryKey: 'ab2soft_cycle_manager_v64_case_history',
+    stateKey: 'ab2soft_cycle_manager_v65_state',
+    lockKey: 'ab2soft_cycle_manager_v65_lock',
+    caseHistoryKey: 'ab2soft_cycle_manager_v65_case_history',
 
     downCycleMap: {
       30: 14,
@@ -223,7 +223,7 @@
     return d;
   }
 
-  // Boundary is the 5th of next month from "today"
+  // Boundary = 5th of next month from today
   function getBoundary5thOfNextMonth(baseDate) {
     return new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 5);
   }
@@ -242,36 +242,16 @@
     return formatYMD(transferDate) === formatYMD(getTomorrowPDT());
   }
 
-  // Last-3-days target zone relative to the current cycle boundary.
-  // For a boundary on the 5th, the target zone is 3rd, 4th, 5th.
-  function isInLast3DaysZone(date) {
+  // Boundary logic should only care whether transfer date is beyond the 5th.
+  // If transfer date is <= boundary, no boundary correction should happen.
+  function isTransferDateBeyondBoundary(transferDate) {
     const boundary = getBoundary5thOfNextMonthFromToday();
-    const diffMs = boundary.getTime() - date.getTime();
-    const diffDays = Math.floor(diffMs / 86400000);
-    return diffDays >= 0 && diffDays <= 2;
+    return transferDate.getTime() > boundary.getTime();
   }
 
-  function transferDateNeedsBoundaryCorrection(transferDate) {
-    return !isInLast3DaysZone(transferDate);
-  }
-
-  // For the earnings>=8 boundary case, we ONLY decrease cycle.
-  // We pick the strongest downward cycle needed to pull the schedule earlier.
-  // Rule:
-  // - 30 -> 14 if transfer date is outside target zone
-  // - 14 -> 7  if still outside target zone
-  // - 7  -> 3  if still outside target zone
-  // - 3  stays 3
-  function getBoundaryCorrectionTargetCycle(currentCycle, transferDate) {
-    if (isInLast3DaysZone(transferDate)) {
-      return null;
-    }
-
+  // For earnings>=8 boundary case, only decrease cycle, never increase.
+  function getBoundaryCorrectionTargetCycle(currentCycle) {
     const candidates = CONFIG.lowerCycleCandidates[currentCycle] || [currentCycle];
-    if (!candidates.length) return null;
-
-    // Choose the smallest available cycle for strongest pull toward boundary.
-    // 30 => 3, 14 => 3, 7 => 3, 3 => 3
     return candidates[candidates.length - 1] || null;
   }
 
@@ -454,15 +434,14 @@
   function evaluateCaseWithLock(current) {
     const lockState = loadTriggerLock();
 
-    // Boundary correction:
-    // Apply only when:
-    // - earnings >= 8
-    // - we are still more than 3 days away from the cycle boundary
-    // - current transfer date is outside the target zone (3rd/4th/5th)
+    // Boundary correction only when:
+    // 1. earnings >= 8
+    // 2. more than 3 days remain before boundary
+    // 3. transfer date is beyond the 5th boundary
     if (
       current.earnings >= 8 &&
       current.daysToLastDate > 3 &&
-      transferDateNeedsBoundaryCorrection(current.transferDate)
+      isTransferDateBeyondBoundary(current.transferDate)
     ) {
       const factorKey = FACTORS.BOUNDARY_ZONE;
       if (shouldBlockRetrigger(lockState, { ...current, factorKey })) {
@@ -470,9 +449,9 @@
       }
       saveTriggerLock(7, factorKey, current.transferDateYMD, current.earnings);
       return {
-        action: 'reduce_cycle_to_last3days_zone',
+        action: 'reduce_cycle_to_boundary',
         caseId: 7,
-        reason: 'earnings >= 8, more than 3 days remain, and transfer date is outside the 3rd/4th/5th target zone'
+        reason: 'earnings >= 8, more than 3 days remain, and transfer date is beyond the 5th boundary'
       };
     }
 
@@ -635,8 +614,8 @@
       } else {
         targetCycle = oneStepDown;
       }
-    } else if (state.action === 'reduce_cycle_to_last3days_zone') {
-      targetCycle = getBoundaryCorrectionTargetCycle(selectedCycle, transferDate);
+    } else if (state.action === 'reduce_cycle_to_boundary') {
+      targetCycle = getBoundaryCorrectionTargetCycle(selectedCycle);
     }
 
     if (targetCycle == null) {
@@ -690,7 +669,6 @@
       confirmWithRetry(state.caseId, 1);
     }, CONFIG.confirmDelayMs);
 
-    // Always redirect back to earnings page after submit flow.
     setTimeout(() => {
       showBanner('Redirecting to earnings for verification...', '#1565c0');
       location.href = '/earnings';
