@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version     6.4
-// @description  Final merged logic with trigger-lock, cycle updates, bank selection, submit redirect, and earnings-page return
+// @version      6.5
+// @description  Final merged logic with trigger-lock, cycle updates, bank selection, submit redirect, earnings-page verification, and boundary-zone targeting
 // @match        https://worker.mturk.com/earnings*
 // @match        https://worker.mturk.com/payment_schedule*
 // @match        https://worker.mturk.com/payment_schedule/submit*
@@ -26,9 +26,9 @@
     maxConfirmAttempts: 2,
     afterSubmitDelayMs: 6500,
 
-    stateKey: 'ab2soft_cycle_manager_v5_state',
-    lockKey: 'ab2soft_cycle_manager_v5_lock',
-    caseHistoryKey: 'ab2soft_cycle_manager_v5_case_history',
+    stateKey: 'ab2soft_cycle_manager_v6_state',
+    lockKey: 'ab2soft_cycle_manager_v6_lock',
+    caseHistoryKey: 'ab2soft_cycle_manager_v6_case_history',
 
     downCycleMap: {
       30: 14,
@@ -55,7 +55,8 @@
   const FACTORS = {
     LT7: 'lt7days',
     LT3: 'lt3days',
-    DAY_BEFORE: 'day_before_transfer'
+    DAY_BEFORE: 'day_before_transfer',
+    BOUNDARY_ZONE: 'boundary_zone'
   };
 
   const SINGLE_TRIGGER_CASES = new Set([3, 4, 5, 6]);
@@ -167,6 +168,27 @@
     log('Trigger lock cleared');
   }
 
+  function getPDTDate() {
+    const now = new Date();
+    const pdtString = now.toLocaleString('en-US', {
+      timeZone: 'America/Los_Angeles'
+    });
+
+    const pdt = new Date(pdtString);
+    pdt.setHours(0, 0, 0, 0);
+    return pdt;
+  }
+
+  function today() {
+    return getPDTDate();
+  }
+
+  function getTomorrowPDT() {
+    const d = getPDTDate();
+    d.setDate(d.getDate() + 1);
+    return d;
+  }
+
   function formatYMD(date) {
     if (!(date instanceof Date) || isNaN(date.getTime())) return '';
     const d = new Date(date);
@@ -174,20 +196,8 @@
     return d.toISOString().slice(0, 10);
   }
 
-  function today() {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d;
-  }
-
   function todayYMD() {
     return formatYMD(today());
-  }
-
-  function tomorrow() {
-    const d = today();
-    d.setDate(d.getDate() + 1);
-    return d;
   }
 
   function addDays(baseDate, days) {
@@ -195,14 +205,6 @@
     d.setHours(0, 0, 0, 0);
     d.setDate(d.getDate() + days);
     return d;
-  }
-
-  function sameMonth(a, b) {
-    return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
-  }
-
-  function isOneDayBeforeTransfer(transferDate) {
-    return formatYMD(transferDate) === formatYMD(tomorrow());
   }
 
   function parseMoney(text) {
@@ -221,15 +223,48 @@
     return d;
   }
 
-  // Monthly cycle boundary: 5th of next month
+  // Monthly cycle boundary: 5th of next month from today
   function getBoundary5thOfNextMonth(baseDate) {
     return new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 5);
+  }
+
+  function getBoundary5thOfNextMonthFromToday() {
+    return getBoundary5thOfNextMonth(today());
   }
 
   function daysUntilMonthlyCycleLastDate(fromDate) {
     const boundary = getBoundary5thOfNextMonth(fromDate);
     const diffMs = boundary.getTime() - fromDate.getTime();
     return Math.floor(diffMs / 86400000);
+  }
+
+  function isOneDayBeforeTransfer(transferDate) {
+    return formatYMD(transferDate) === formatYMD(getTomorrowPDT());
+  }
+
+  // Target zone = last 3 days of the cycle window: 3rd, 4th, 5th
+  function isInLast3DaysZone(date) {
+    const boundary = getBoundary5thOfNextMonthFromToday();
+    const diffMs = boundary.getTime() - date.getTime();
+    const diffDays = Math.floor(diffMs / 86400000);
+    return diffDays >= 0 && diffDays <= 2;
+  }
+
+  function transferDateNeedsBoundaryCorrection(transferDate) {
+    return !isInLast3DaysZone(transferDate);
+  }
+
+  function getBestCycleForLast3DaysZone(currentCycle, transferDate) {
+    const candidates = CONFIG.lowerCycleCandidates[currentCycle] || [currentCycle];
+
+    for (const cycle of candidates) {
+      const nextDate = addDays(transferDate, cycle);
+      if (isInLast3DaysZone(nextDate)) {
+        return cycle;
+      }
+    }
+
+    return null;
   }
 
   function staysWithin5thOfNextMonth(transferDate, cycleDays) {
@@ -250,7 +285,6 @@
 
   function shouldBlockRetrigger(lockState, current, caseId = null) {
     if (caseId != null && SINGLE_TRIGGER_CASES.has(caseId)) {
-      // For cases 3/4/5/6 use strict per-case one-time memory only.
       return hasCaseTriggeredOnce(caseId);
     }
 
@@ -339,7 +373,6 @@
     if (attempt >= CONFIG.maxSubmitAttempts) return;
 
     setTimeout(() => {
-      // If we are still on the payment schedule page, the first click likely did not submit.
       if (isPaymentSchedulePage()) {
         showBanner(`Update did not submit. Retrying (${attempt + 1}/${CONFIG.maxSubmitAttempts})...`, '#ef6c00');
         submitUpdateWithRetry(attempt + 1);
@@ -382,7 +415,6 @@
     if (attempt >= CONFIG.maxConfirmAttempts) return;
 
     setTimeout(() => {
-      // If still on submit page, confirmation likely did not complete yet.
       if (isSubmitPage()) {
         showBanner(`Confirm did not complete. Retrying (${attempt + 1}/${CONFIG.maxConfirmAttempts})...`, '#ef6c00');
         confirmWithRetry(caseId, attempt + 1);
@@ -413,6 +445,26 @@
 
   function evaluateCaseWithLock(current) {
     const lockState = loadTriggerLock();
+
+    // Boundary-zone correction:
+    // Only trigger when earnings >= 8, we are NOT within the final 3 days to the boundary,
+    // and the transfer date is not already landing inside 3rd/4th/5th target zone.
+    if (
+      current.earnings >= 8 &&
+      current.daysToLastDate > 3 &&
+      transferDateNeedsBoundaryCorrection(current.transferDate)
+    ) {
+      const factorKey = FACTORS.BOUNDARY_ZONE;
+      if (shouldBlockRetrigger(lockState, { ...current, factorKey })) {
+        return { action: 'blocked_repeat', caseId: 7, reason: 'boundary-zone correction already triggered' };
+      }
+      saveTriggerLock(7, factorKey, current.transferDateYMD, current.earnings);
+      return {
+        action: 'reduce_cycle_to_last3days_zone',
+        caseId: 7,
+        reason: 'earnings >= 8, more than 3 days remain, and transfer date is outside 3rd/4th/5th target zone'
+      };
+    }
 
     // 1. earnings >=20 and one day before transfer date -> do nothing
     if (current.earnings >= 20 && current.isOneDayBeforeTransfer) {
@@ -527,7 +579,8 @@
       reason: decision.reason,
       earnings,
       originalTransferDate: formatYMD(transferDate),
-      savedOn: todayYMD()
+      savedOn: todayYMD(),
+      mustReturnToEarnings: true
     }, `Opening payment schedule: ${decision.reason}`);
   }
 
@@ -573,18 +626,13 @@
       } else {
         targetCycle = oneStepDown;
       }
+    } else if (state.action === 'reduce_cycle_to_last3days_zone') {
+      targetCycle = getBestCycleForLast3DaysZone(selectedCycle, transferDate);
     }
 
     if (targetCycle == null) {
       showBanner('No target cycle determined.', '#c62828');
       return;
-    }
-
-    if (state.earnings >= 8 && !staysWithin5thOfNextMonth(transferDate, targetCycle)) {
-      const corrected = getMaxValidLowerCycleWithinBoundary(selectedCycle, transferDate);
-      if (corrected != null) {
-        targetCycle = corrected;
-      }
     }
 
     if (targetCycle === selectedCycle) {
@@ -602,7 +650,8 @@
       ...state,
       phase: 'submitted',
       previousCycle: selectedCycle,
-      nextCycle: targetCycle
+      nextCycle: targetCycle,
+      mustReturnToEarnings: true
     });
 
     if (CONFIG.autoClickUpdate) {
@@ -632,11 +681,10 @@
       confirmWithRetry(state.caseId, 1);
     }, CONFIG.confirmDelayMs);
 
+    // Always redirect back to earnings for verification after any transfer-date-changing flow
     setTimeout(() => {
-      if (isSubmitPage()) {
-        showBanner('Still on submit page. Redirecting to earnings...', '#ef6c00');
-        location.href = '/earnings';
-      }
+      showBanner('Redirecting to earnings for verification...', '#1565c0');
+      location.href = '/earnings';
     }, CONFIG.afterSubmitDelayMs);
   }
 
