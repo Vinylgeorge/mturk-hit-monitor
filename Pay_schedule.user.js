@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      6.5
-// @description  Final merged logic with trigger-lock, cycle updates, bank selection, submit redirect, earnings-page verification, and boundary-zone targeting
+// @version      6.6
+// @description  MTurk payment cycle manager with trigger-lock, boundary correction, forced earnings-page verification, and cycle-down targeting
 // @match        https://worker.mturk.com/earnings*
 // @match        https://worker.mturk.com/payment_schedule*
 // @match        https://worker.mturk.com/payment_schedule/submit*
@@ -26,9 +26,9 @@
     maxConfirmAttempts: 2,
     afterSubmitDelayMs: 6500,
 
-    stateKey: 'ab2soft_cycle_manager_v6_state',
-    lockKey: 'ab2soft_cycle_manager_v6_lock',
-    caseHistoryKey: 'ab2soft_cycle_manager_v6_case_history',
+    stateKey: 'ab2soft_cycle_manager_v64_state',
+    lockKey: 'ab2soft_cycle_manager_v64_lock',
+    caseHistoryKey: 'ab2soft_cycle_manager_v64_case_history',
 
     downCycleMap: {
       30: 14,
@@ -223,7 +223,7 @@
     return d;
   }
 
-  // Monthly cycle boundary: 5th of next month from today
+  // Boundary is the 5th of next month from "today"
   function getBoundary5thOfNextMonth(baseDate) {
     return new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 5);
   }
@@ -242,7 +242,8 @@
     return formatYMD(transferDate) === formatYMD(getTomorrowPDT());
   }
 
-  // Target zone = last 3 days of the cycle window: 3rd, 4th, 5th
+  // Last-3-days target zone relative to the current cycle boundary.
+  // For a boundary on the 5th, the target zone is 3rd, 4th, 5th.
   function isInLast3DaysZone(date) {
     const boundary = getBoundary5thOfNextMonthFromToday();
     const diffMs = boundary.getTime() - date.getTime();
@@ -254,17 +255,24 @@
     return !isInLast3DaysZone(transferDate);
   }
 
-  function getBestCycleForLast3DaysZone(currentCycle, transferDate) {
-    const candidates = CONFIG.lowerCycleCandidates[currentCycle] || [currentCycle];
-
-    for (const cycle of candidates) {
-      const nextDate = addDays(transferDate, cycle);
-      if (isInLast3DaysZone(nextDate)) {
-        return cycle;
-      }
+  // For the earnings>=8 boundary case, we ONLY decrease cycle.
+  // We pick the strongest downward cycle needed to pull the schedule earlier.
+  // Rule:
+  // - 30 -> 14 if transfer date is outside target zone
+  // - 14 -> 7  if still outside target zone
+  // - 7  -> 3  if still outside target zone
+  // - 3  stays 3
+  function getBoundaryCorrectionTargetCycle(currentCycle, transferDate) {
+    if (isInLast3DaysZone(transferDate)) {
+      return null;
     }
 
-    return null;
+    const candidates = CONFIG.lowerCycleCandidates[currentCycle] || [currentCycle];
+    if (!candidates.length) return null;
+
+    // Choose the smallest available cycle for strongest pull toward boundary.
+    // 30 => 3, 14 => 3, 7 => 3, 3 => 3
+    return candidates[candidates.length - 1] || null;
   }
 
   function staysWithin5thOfNextMonth(transferDate, cycleDays) {
@@ -446,9 +454,11 @@
   function evaluateCaseWithLock(current) {
     const lockState = loadTriggerLock();
 
-    // Boundary-zone correction:
-    // Only trigger when earnings >= 8, we are NOT within the final 3 days to the boundary,
-    // and the transfer date is not already landing inside 3rd/4th/5th target zone.
+    // Boundary correction:
+    // Apply only when:
+    // - earnings >= 8
+    // - we are still more than 3 days away from the cycle boundary
+    // - current transfer date is outside the target zone (3rd/4th/5th)
     if (
       current.earnings >= 8 &&
       current.daysToLastDate > 3 &&
@@ -462,7 +472,7 @@
       return {
         action: 'reduce_cycle_to_last3days_zone',
         caseId: 7,
-        reason: 'earnings >= 8, more than 3 days remain, and transfer date is outside 3rd/4th/5th target zone'
+        reason: 'earnings >= 8, more than 3 days remain, and transfer date is outside the 3rd/4th/5th target zone'
       };
     }
 
@@ -478,7 +488,7 @@
       return { action: 'set_cycle_3', caseId: 2, reason: 'earnings >= 20 and not one day before transfer date' };
     }
 
-    // 5. earning >=8 and one day before transfer date and <3 days to last date -> do nothing
+    // 5. earnings >=8 and one day before transfer date and <3 days to last date -> do nothing
     if (current.earnings >= 8 && current.isOneDayBeforeTransfer && current.daysToLastDate < 3) {
       const factorKey = FACTORS.LT3;
       if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 5)) {
@@ -489,7 +499,7 @@
       return { action: 'do_nothing', caseId: 5, reason: 'earnings >= 8, one day before transfer, <3 days left' };
     }
 
-    // 6. earning <8 and one day before transfer date and <3 days to last date -> increase one step
+    // 6. earnings <8 and one day before transfer date and <3 days to last date -> increase one step
     if (current.earnings < 8 && current.isOneDayBeforeTransfer && current.daysToLastDate < 3) {
       const factorKey = FACTORS.LT3;
       if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 6)) {
@@ -535,7 +545,6 @@
       return;
     }
 
-    // Return verification after submit
     if (state && state.phase === 'verify_on_earnings') {
       const newTransferDate = getTransferDate();
       const oldTransferDate = state.originalTransferDate ? new Date(state.originalTransferDate + 'T00:00:00') : null;
@@ -627,7 +636,7 @@
         targetCycle = oneStepDown;
       }
     } else if (state.action === 'reduce_cycle_to_last3days_zone') {
-      targetCycle = getBestCycleForLast3DaysZone(selectedCycle, transferDate);
+      targetCycle = getBoundaryCorrectionTargetCycle(selectedCycle, transferDate);
     }
 
     if (targetCycle == null) {
@@ -681,7 +690,7 @@
       confirmWithRetry(state.caseId, 1);
     }, CONFIG.confirmDelayMs);
 
-    // Always redirect back to earnings for verification after any transfer-date-changing flow
+    // Always redirect back to earnings page after submit flow.
     setTimeout(() => {
       showBanner('Redirecting to earnings for verification...', '#1565c0');
       location.href = '/earnings';
