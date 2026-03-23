@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MTurk SUBS
 // @namespace    Violentmonkey Scripts
-// @version      5
+// @version      5.1
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -59,7 +59,7 @@
 
   // Remove lock when this tab leaves
   window.addEventListener("beforeunload", () => {
-    localStorage.removeItem(KEY);
+    localStorage.setItem(KEY, "0");
   });
 })();
   // ---------------------------------------------------------
