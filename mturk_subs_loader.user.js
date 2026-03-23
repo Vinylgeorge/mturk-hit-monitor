@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MTurk SUBS
 // @namespace    Violentmonkey Scripts
-// @version      5.2
+// @version      5.3
 // @match        https://worker.mturk.com/errors/*
 // @match        https://www.mturk.com/errors/*
 // @match        https://worker.mturk.com/*
@@ -43,7 +43,7 @@
   // ---------------------------------------------------------
 (function enforceSingleTasksSlash() {
   const TASKS_NOSLASH = "https://worker.mturk.com/tasks";
-  const KEY = "AB2_TASKS_SLASH_LOCK";
+  const KEY = "TASKS_SLASH_LOCK";
   const STALE_MS = 20000;
   const TAB_ID = Date.now() + "_" + Math.random().toString(36).slice(2);
 
