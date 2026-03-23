@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      6.7
+// @version      6.8
 // @description  MTurk payment cycle manager with trigger-lock, corrected boundary logic, forced earnings-page verification, and cycle updates
 // @match        https://worker.mturk.com/earnings*
 // @match        https://worker.mturk.com/payment_schedule*
