@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      6.8
-// @description  MTurk payment cycle manager with trigger-lock, corrected boundary logic, forced earnings-page verification, and cycle updates
+// @version      6.9
+// @description  MTurk payment cycle manager with trigger-lock, corrected boundary logic, reversible cycle fallback, and forced earnings-page verification
 // @match        https://worker.mturk.com/earnings*
 // @match        https://worker.mturk.com/payment_schedule*
 // @match        https://worker.mturk.com/payment_schedule/submit*
@@ -26,9 +26,9 @@
     maxConfirmAttempts: 2,
     afterSubmitDelayMs: 6500,
 
-    stateKey: 'ab2soft_cycle_manager_v65_state',
-    lockKey: 'ab2soft_cycle_manager_v65_lock',
-    caseHistoryKey: 'ab2soft_cycle_manager_v65_case_history',
+    stateKey: 'ab2soft_cycle_manager_v66_state',
+    lockKey: 'ab2soft_cycle_manager_v66_lock',
+    caseHistoryKey: 'ab2soft_cycle_manager_v66_case_history',
 
     downCycleMap: {
       30: 14,
@@ -223,7 +223,6 @@
     return d;
   }
 
-  // Boundary = 5th of next month from today
   function getBoundary5thOfNextMonth(baseDate) {
     return new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 5);
   }
@@ -242,17 +241,9 @@
     return formatYMD(transferDate) === formatYMD(getTomorrowPDT());
   }
 
-  // Boundary logic should only care whether transfer date is beyond the 5th.
-  // If transfer date is <= boundary, no boundary correction should happen.
   function isTransferDateBeyondBoundary(transferDate) {
     const boundary = getBoundary5thOfNextMonthFromToday();
     return transferDate.getTime() > boundary.getTime();
-  }
-
-  // For earnings>=8 boundary case, only decrease cycle, never increase.
-  function getBoundaryCorrectionTargetCycle(currentCycle) {
-    const candidates = CONFIG.lowerCycleCandidates[currentCycle] || [currentCycle];
-    return candidates[candidates.length - 1] || null;
   }
 
   function staysWithin5thOfNextMonth(transferDate, cycleDays) {
@@ -431,13 +422,39 @@
     };
   }
 
+  function getDecreaseOrReverseCycle(currentCycle) {
+    if (currentCycle === 30) return 14;
+    if (currentCycle === 14) return 7;
+    if (currentCycle === 7) return 3;
+    if (currentCycle === 3) return 7; // reverse
+    return currentCycle;
+  }
+
+  function getIncreaseOrReverseCycle(currentCycle) {
+    if (currentCycle === 3) return 7;
+    if (currentCycle === 7) return 14;
+    if (currentCycle === 14) return 30;
+    if (currentCycle === 30) return 14; // reverse
+    return currentCycle;
+  }
+
+  function getSetCycle3OrReverse(currentCycle) {
+    if (currentCycle !== 3) return 3;
+    return 7; // if already 3, reverse so action is not a no-op
+  }
+
+  function getBoundaryCorrectionTargetCycle(currentCycle) {
+    // Boundary case is a change case, so do not allow no-op.
+    // Always try to decrease; if already at 3, reverse upward.
+    return getDecreaseOrReverseCycle(currentCycle);
+  }
+
   function evaluateCaseWithLock(current) {
     const lockState = loadTriggerLock();
 
-    // Boundary correction only when:
-    // 1. earnings >= 8
-    // 2. more than 3 days remain before boundary
-    // 3. transfer date is beyond the 5th boundary
+    // 7. Boundary correction:
+    // Apply only when earnings >= 8, more than 3 days remain,
+    // and transfer date is beyond the 5th boundary.
     if (
       current.earnings >= 8 &&
       current.daysToLastDate > 3 &&
@@ -599,20 +616,23 @@
     let targetCycle = null;
 
     if (state.action === 'set_cycle_3') {
-      targetCycle = 3;
+      targetCycle = getSetCycle3OrReverse(selectedCycle);
     } else if (state.action === 'increase_one_step') {
-      targetCycle = CONFIG.upCycleMap[selectedCycle] || selectedCycle;
+      targetCycle = getIncreaseOrReverseCycle(selectedCycle);
     } else if (state.action === 'decrease_one_step_then_validate_5th') {
-      const oneStepDown = CONFIG.downCycleMap[selectedCycle] || selectedCycle;
+      const proposed = getDecreaseOrReverseCycle(selectedCycle);
 
       if (state.earnings >= 8) {
-        if (staysWithin5thOfNextMonth(transferDate, oneStepDown)) {
-          targetCycle = oneStepDown;
+        if (staysWithin5thOfNextMonth(transferDate, proposed)) {
+          targetCycle = proposed;
         } else {
           targetCycle = getMaxValidLowerCycleWithinBoundary(selectedCycle, transferDate);
+          if (targetCycle == null) {
+            targetCycle = proposed;
+          }
         }
       } else {
-        targetCycle = oneStepDown;
+        targetCycle = proposed;
       }
     } else if (state.action === 'reduce_cycle_to_boundary') {
       targetCycle = getBoundaryCorrectionTargetCycle(selectedCycle);
