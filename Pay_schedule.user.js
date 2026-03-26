@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MRPsoft MTurk Payment Cycle Manager
 // @namespace    MRPsoft
-/ @version       7.0
+// @version       7.0
 // @match        https://worker.mturk.com/earnings*
 // @match        https://worker.mturk.com/payment_schedule*
 // @match        https://worker.mturk.com/payment_schedule/submit*
