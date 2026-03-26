@@ -1,13 +1,15 @@
 // ==UserScript==
-// @name         AB2soft MTurk Payment Cycle Manager
-// @namespace    AB2soft
-// @version      6.9
-// @description  MTurk payment cycle manager with trigger-lock, corrected boundary logic, reversible cycle fallback, and forced earnings-page verification
+// @name         MRPsoft MTurk Payment Cycle Manager
+// @namespace    MRPsoft
+/ @version       7.0
 // @match        https://worker.mturk.com/earnings*
 // @match        https://worker.mturk.com/payment_schedule*
 // @match        https://worker.mturk.com/payment_schedule/submit*
 // @grant        none
 // @run-at       document-idle
+// @updateURL    https://github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/Pay_schedule.user.js
+// @downloadURL  https://github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/Pay_schedule.user.js
+// ==/UserScript==
 // ==/UserScript==
 
 (function () {
@@ -26,9 +28,9 @@
     maxConfirmAttempts: 2,
     afterSubmitDelayMs: 6500,
 
-    stateKey: 'ab2soft_cycle_manager_v66_state',
-    lockKey: 'ab2soft_cycle_manager_v66_lock',
-    caseHistoryKey: 'ab2soft_cycle_manager_v66_case_history',
+    stateKey: 'ab2soft_cycle_manager_v67_state',
+    lockKey: 'ab2soft_cycle_manager_v67_lock',
+    caseHistoryKey: 'ab2soft_cycle_manager_v67_case_history',
 
     downCycleMap: {
       30: 14,
@@ -267,6 +269,11 @@
       return hasCaseTriggeredOnce(caseId);
     }
 
+    // Case 7 is allowed to keep retriggering until boundary is satisfied.
+    if (caseId === 7) {
+      return !isTransferDateBeyondBoundary(current.transferDate);
+    }
+
     if (!lockState || !lockState.locked) return false;
 
     if (current.earnings >= 20) return false;
@@ -426,7 +433,7 @@
     if (currentCycle === 30) return 14;
     if (currentCycle === 14) return 7;
     if (currentCycle === 7) return 3;
-    if (currentCycle === 3) return 7; // reverse
+    if (currentCycle === 3) return 7;
     return currentCycle;
   }
 
@@ -434,19 +441,27 @@
     if (currentCycle === 3) return 7;
     if (currentCycle === 7) return 14;
     if (currentCycle === 14) return 30;
-    if (currentCycle === 30) return 14; // reverse
+    if (currentCycle === 30) return 14;
     return currentCycle;
   }
 
-  function getSetCycle3OrReverse(currentCycle) {
+  function getSetCycle3OrReverse(currentCycle, caseId = null) {
+    // Case 2 should remain strict set-to-3 behavior
+    if (caseId === 2) return 3;
+
     if (currentCycle !== 3) return 3;
-    return 7; // if already 3, reverse so action is not a no-op
+    return 7;
   }
 
   function getBoundaryCorrectionTargetCycle(currentCycle) {
-    // Boundary case is a change case, so do not allow no-op.
-    // Always try to decrease; if already at 3, reverse upward.
-    return getDecreaseOrReverseCycle(currentCycle);
+    // Case 7 should step down one level at a time.
+    // 30 -> 14 -> 7 -> 3
+    // If already 3 and still somehow beyond boundary, reverse fallback.
+    if (currentCycle === 30) return 14;
+    if (currentCycle === 14) return 7;
+    if (currentCycle === 7) return 3;
+    if (currentCycle === 3) return 7;
+    return currentCycle;
   }
 
   function evaluateCaseWithLock(current) {
@@ -461,8 +476,8 @@
       isTransferDateBeyondBoundary(current.transferDate)
     ) {
       const factorKey = FACTORS.BOUNDARY_ZONE;
-      if (shouldBlockRetrigger(lockState, { ...current, factorKey })) {
-        return { action: 'blocked_repeat', caseId: 7, reason: 'boundary-zone correction already triggered' };
+      if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 7)) {
+        return { action: 'blocked_repeat', caseId: 7, reason: 'boundary-zone correction already satisfied' };
       }
       saveTriggerLock(7, factorKey, current.transferDateYMD, current.earnings);
       return {
@@ -616,7 +631,7 @@
     let targetCycle = null;
 
     if (state.action === 'set_cycle_3') {
-      targetCycle = getSetCycle3OrReverse(selectedCycle);
+      targetCycle = getSetCycle3OrReverse(selectedCycle, state.caseId);
     } else if (state.action === 'increase_one_step') {
       targetCycle = getIncreaseOrReverseCycle(selectedCycle);
     } else if (state.action === 'decrease_one_step_then_validate_5th') {
