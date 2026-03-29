@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      7.2
+// @version      7.3
 // @description  MTurk payment cycle manager with case-3 bounce logic, boundary reruns, forced earnings verification, and conditional set-to-3 rule
 // @match        https://worker.mturk.com/earnings*
 // @match        https://worker.mturk.com/payment_schedule*
@@ -687,7 +687,11 @@
         targetCycle = getSetCycle3OrReverse(selectedCycle, state.caseId);
       } else {
         showBanner('Skipped forcing cycle 3 because transfer date is 3 days away or less.', '#6c757d');
-        return;
+        setTimeout(
+      () => location.assign("https://worker.mturk.com/tasks/"),
+      2500
+    );
+       
       }
     } else if (state.action === 'increase_one_step') {
       targetCycle = getIncreaseOrReverseCycle(selectedCycle);
