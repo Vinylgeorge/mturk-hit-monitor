@@ -1,7 +1,8 @@
 // ==UserScript==
-// @name         MRPsoft MTurk Payment Cycle Manager
-// @namespace    MRPsoft
-// @version       7.0
+// @name         AB2soft MTurk Payment Cycle Manager
+// @namespace    AB2soft
+// @version      7.2
+// @description  MTurk payment cycle manager with case-3 bounce logic, boundary reruns, forced earnings verification, and conditional set-to-3 rule
 // @match        https://worker.mturk.com/earnings*
 // @match        https://worker.mturk.com/payment_schedule*
 // @match        https://worker.mturk.com/payment_schedule/submit*
@@ -9,7 +10,6 @@
 // @run-at       document-idle
 // @updateURL    https://github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/Pay_schedule.user.js
 // @downloadURL  https://github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/Pay_schedule.user.js
-// ==/UserScript==
 // ==/UserScript==
 
 (function () {
@@ -28,9 +28,10 @@
     maxConfirmAttempts: 2,
     afterSubmitDelayMs: 6500,
 
-    stateKey: 'ab2soft_cycle_manager_v67_state',
-    lockKey: 'ab2soft_cycle_manager_v67_lock',
-    caseHistoryKey: 'ab2soft_cycle_manager_v67_case_history',
+    stateKey: 'ab2soft_cycle_manager_v69_state',
+    lockKey: 'ab2soft_cycle_manager_v69_lock',
+    caseHistoryKey: 'ab2soft_cycle_manager_v69_case_history',
+    case3BounceKey: 'ab2soft_cycle_manager_v69_case3_bounce',
 
     downCycleMap: {
       30: 14,
@@ -58,10 +59,12 @@
     LT7: 'lt7days',
     LT3: 'lt3days',
     DAY_BEFORE: 'day_before_transfer',
-    BOUNDARY_ZONE: 'boundary_zone'
+    BOUNDARY_ZONE: 'boundary_zone',
+    CASE3_BOUNCE: 'case3_bounce'
   };
 
-  const SINGLE_TRIGGER_CASES = new Set([3, 4, 5, 6]);
+  // Case 3 removed from single-trigger set because it may need 2-step bounce: 3 -> 7 -> 3
+  const SINGLE_TRIGGER_CASES = new Set([4, 5, 6]);
 
   function log(...args) {
     if (CONFIG.debug) console.log('[AB2soft]', ...args);
@@ -170,6 +173,24 @@
     log('Trigger lock cleared');
   }
 
+  function saveCase3Bounce(data) {
+    localStorage.setItem(CONFIG.case3BounceKey, JSON.stringify(data));
+    log('Case 3 bounce saved:', data);
+  }
+
+  function loadCase3Bounce() {
+    try {
+      return JSON.parse(localStorage.getItem(CONFIG.case3BounceKey) || 'null');
+    } catch {
+      return null;
+    }
+  }
+
+  function clearCase3Bounce() {
+    localStorage.removeItem(CONFIG.case3BounceKey);
+    log('Case 3 bounce cleared');
+  }
+
   function getPDTDate() {
     const now = new Date();
     const pdtString = now.toLocaleString('en-US', {
@@ -207,6 +228,14 @@
     d.setHours(0, 0, 0, 0);
     d.setDate(d.getDate() + days);
     return d;
+  }
+
+  function daysBetween(fromDate, toDate) {
+    const a = new Date(fromDate);
+    const b = new Date(toDate);
+    a.setHours(0, 0, 0, 0);
+    b.setHours(0, 0, 0, 0);
+    return Math.floor((b.getTime() - a.getTime()) / 86400000);
   }
 
   function parseMoney(text) {
@@ -269,9 +298,12 @@
       return hasCaseTriggeredOnce(caseId);
     }
 
-    // Case 7 is allowed to keep retriggering until boundary is satisfied.
     if (caseId === 7) {
       return !isTransferDateBeyondBoundary(current.transferDate);
+    }
+
+    if (caseId === 3) {
+      return false;
     }
 
     if (!lockState || !lockState.locked) return false;
@@ -425,7 +457,8 @@
       transferDate,
       transferDateYMD: formatYMD(transferDate),
       isOneDayBeforeTransfer: isOneDayBeforeTransfer(transferDate),
-      daysToLastDate: daysUntilMonthlyCycleLastDate(today())
+      daysToLastDate: daysUntilMonthlyCycleLastDate(today()),
+      daysUntilTransfer: daysBetween(today(), transferDate)
     };
   }
 
@@ -446,17 +479,12 @@
   }
 
   function getSetCycle3OrReverse(currentCycle, caseId = null) {
-    // Case 2 should remain strict set-to-3 behavior
     if (caseId === 2) return 3;
-
     if (currentCycle !== 3) return 3;
     return 7;
   }
 
   function getBoundaryCorrectionTargetCycle(currentCycle) {
-    // Case 7 should step down one level at a time.
-    // 30 -> 14 -> 7 -> 3
-    // If already 3 and still somehow beyond boundary, reverse fallback.
     if (currentCycle === 30) return 14;
     if (currentCycle === 14) return 7;
     if (currentCycle === 7) return 3;
@@ -466,10 +494,23 @@
 
   function evaluateCaseWithLock(current) {
     const lockState = loadTriggerLock();
+    const case3Bounce = loadCase3Bounce();
 
-    // 7. Boundary correction:
-    // Apply only when earnings >= 8, more than 3 days remain,
-    // and transfer date is beyond the 5th boundary.
+    if (
+      case3Bounce &&
+      case3Bounce.active &&
+      current.earnings < 20 &&
+      current.isOneDayBeforeTransfer &&
+      current.daysToLastDate >= 7
+    ) {
+      saveTriggerLock(3, FACTORS.CASE3_BOUNCE, current.transferDateYMD, current.earnings);
+      return {
+        action: 'case3_bounce_back_to_3',
+        caseId: 3,
+        reason: 'case 3 bounce-back: returning cycle from 7 to 3'
+      };
+    }
+
     if (
       current.earnings >= 8 &&
       current.daysToLastDate > 3 &&
@@ -487,19 +528,23 @@
       };
     }
 
-    // 1. earnings >=20 and one day before transfer date -> do nothing
     if (current.earnings >= 20 && current.isOneDayBeforeTransfer) {
       clearTriggerLock();
+      clearCase3Bounce();
       return { action: 'do_nothing', caseId: 1, reason: 'earnings >= 20 and one day before transfer date' };
     }
 
-    // 2. earnings >=20 and not one day before transfer date -> set cycle 3
     if (current.earnings >= 20 && !current.isOneDayBeforeTransfer) {
       clearTriggerLock();
-      return { action: 'set_cycle_3', caseId: 2, reason: 'earnings >= 20 and not one day before transfer date' };
+      clearCase3Bounce();
+      return {
+        action: 'set_cycle_3',
+        caseId: 2,
+        reason: 'earnings >= 20 and not one day before transfer date',
+        daysUntilTransfer: current.daysUntilTransfer
+      };
     }
 
-    // 5. earnings >=8 and one day before transfer date and <3 days to last date -> do nothing
     if (current.earnings >= 8 && current.isOneDayBeforeTransfer && current.daysToLastDate < 3) {
       const factorKey = FACTORS.LT3;
       if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 5)) {
@@ -507,39 +552,45 @@
       }
       markCaseTriggeredOnce(5);
       saveTriggerLock(5, factorKey, current.transferDateYMD, current.earnings);
+      clearCase3Bounce();
       return { action: 'do_nothing', caseId: 5, reason: 'earnings >= 8, one day before transfer, <3 days left' };
     }
 
-    // 6. earnings <8 and one day before transfer date and <3 days to last date -> increase one step
     if (current.earnings < 8 && current.isOneDayBeforeTransfer && current.daysToLastDate < 3) {
       const factorKey = FACTORS.LT3;
       if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 6)) {
         return { action: 'blocked_repeat', caseId: 6, reason: 'case 6 already triggered once' };
       }
       saveTriggerLock(6, factorKey, current.transferDateYMD, current.earnings);
+      clearCase3Bounce();
       return { action: 'increase_one_step', caseId: 6, reason: 'earnings < 8, one day before transfer, <3 days left' };
     }
 
-    // 3. earnings <20 and one day before transfer date and >=7 days left -> one step down, then validate within 5th
     if (current.earnings < 20 && current.isOneDayBeforeTransfer && current.daysToLastDate >= 7) {
       const factorKey = FACTORS.DAY_BEFORE;
       if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 3)) {
-        return { action: 'blocked_repeat', caseId: 3, reason: 'case 3 already triggered once' };
+        return { action: 'blocked_repeat', caseId: 3, reason: 'case 3 blocked' };
       }
       saveTriggerLock(3, factorKey, current.transferDateYMD, current.earnings);
       return { action: 'decrease_one_step_then_validate_5th', caseId: 3, reason: 'earnings < 20, one day before, >=7 days left' };
     }
 
-    // 4. earnings <20 and not one day before transfer date and <7 days left -> set cycle 3
     if (current.earnings < 20 && !current.isOneDayBeforeTransfer && current.daysToLastDate < 7) {
       const factorKey = FACTORS.LT7;
       if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 4)) {
         return { action: 'blocked_repeat', caseId: 4, reason: 'case 4 already triggered once' };
       }
       saveTriggerLock(4, factorKey, current.transferDateYMD, current.earnings);
-      return { action: 'set_cycle_3', caseId: 4, reason: 'earnings < 20, not one day before, <7 days left' };
+      clearCase3Bounce();
+      return {
+        action: 'set_cycle_3',
+        caseId: 4,
+        reason: 'earnings < 20, not one day before, <7 days left',
+        daysUntilTransfer: current.daysUntilTransfer
+      };
     }
 
+    clearCase3Bounce();
     return { action: 'no_match', caseId: null, reason: 'no matching condition' };
   }
 
@@ -600,7 +651,8 @@
       earnings,
       originalTransferDate: formatYMD(transferDate),
       savedOn: todayYMD(),
-      mustReturnToEarnings: true
+      mustReturnToEarnings: true,
+      daysUntilTransfer: current.daysUntilTransfer
     }, `Opening payment schedule: ${decision.reason}`);
   }
 
@@ -631,26 +683,46 @@
     let targetCycle = null;
 
     if (state.action === 'set_cycle_3') {
-      targetCycle = getSetCycle3OrReverse(selectedCycle, state.caseId);
+      if (typeof state.daysUntilTransfer === 'number' && state.daysUntilTransfer > 3) {
+        targetCycle = getSetCycle3OrReverse(selectedCycle, state.caseId);
+      } else {
+        showBanner('Skipped forcing cycle 3 because transfer date is 3 days away or less.', '#6c757d');
+        return;
+      }
     } else if (state.action === 'increase_one_step') {
       targetCycle = getIncreaseOrReverseCycle(selectedCycle);
+    } else if (state.action === 'case3_bounce_back_to_3') {
+      targetCycle = 3;
     } else if (state.action === 'decrease_one_step_then_validate_5th') {
-      const proposed = getDecreaseOrReverseCycle(selectedCycle);
-
-      if (state.earnings >= 8) {
-        if (staysWithin5thOfNextMonth(transferDate, proposed)) {
-          targetCycle = proposed;
-        } else {
-          targetCycle = getMaxValidLowerCycleWithinBoundary(selectedCycle, transferDate);
-          if (targetCycle == null) {
-            targetCycle = proposed;
-          }
-        }
+      if (state.caseId === 3 && selectedCycle === 3) {
+        targetCycle = 7;
+        saveCase3Bounce({
+          active: true,
+          startedOn: todayYMD(),
+          originalTransferDate: state.originalTransferDate
+        });
       } else {
-        targetCycle = proposed;
+        const proposed = getDecreaseOrReverseCycle(selectedCycle);
+
+        if (state.earnings >= 8) {
+          if (staysWithin5thOfNextMonth(transferDate, proposed)) {
+            targetCycle = proposed;
+          } else {
+            targetCycle = getMaxValidLowerCycleWithinBoundary(selectedCycle, transferDate);
+            if (targetCycle == null) {
+              targetCycle = proposed;
+            }
+          }
+        } else {
+          targetCycle = proposed;
+        }
       }
     } else if (state.action === 'reduce_cycle_to_boundary') {
       targetCycle = getBoundaryCorrectionTargetCycle(selectedCycle);
+    }
+
+    if (state.action === 'case3_bounce_back_to_3' && targetCycle === 3) {
+      clearCase3Bounce();
     }
 
     if (targetCycle == null) {
@@ -699,15 +771,12 @@
     });
 
     showBanner('Submit page reached. Clicking Confirm...', '#1565c0');
+;
 
-    setTimeout(() => {
-      confirmWithRetry(state.caseId, 1);
-    }, CONFIG.confirmDelayMs);
-
-    setTimeout(() => {
-      showBanner('Redirecting to earnings for verification...', '#1565c0');
-      location.href = '/earnings';
-    }, CONFIG.afterSubmitDelayMs);
+    setTimeout(
+      () => location.assign("https://worker.mturk.com/earnings/"),
+      2500
+    );
   }
 
   function init() {
