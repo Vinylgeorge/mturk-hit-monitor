@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      7.4
+// @version      7.5
 // @description  MTurk payment cycle manager with case-3 bounce logic, boundary reruns, forced earnings verification, and conditional set-to-3 rule
 // @match        https://worker.mturk.com/earnings*
 // @match        https://worker.mturk.com/payment_schedule*
@@ -137,7 +137,22 @@
   function hasCaseTriggeredOnce(caseId) {
     return loadCaseHistory().includes(caseId);
   }
+function handleHomePage() {
+  const state = loadState();
+  if (!state) return;
 
+  // If we are in or after a submit flow, force return to earnings.
+  if (
+    state.phase === 'submitted' ||
+    state.phase === 'verify_on_earnings' ||
+    state.mustReturnToEarnings
+  ) {
+    showBanner('Home page reached after submit. Redirecting to earnings...', '#1565c0');
+    setTimeout(() => {
+      location.href = '/earnings';
+    }, 800);
+  }
+}
   function markCaseTriggeredOnce(caseId) {
     if (!SINGLE_TRIGGER_CASES.has(caseId)) return;
     const history = loadCaseHistory();
@@ -761,45 +776,50 @@
   }
 
   function handleSubmitPage() {
-    const state = loadState();
-    if (!state) {
-      showBanner('Submit page reached, but no saved state found.', '#6c757d');
-      return;
-    }
-
-    log('Submit page', state);
-
-    saveState({
-      ...state,
-      phase: 'verify_on_earnings'
-    });
-
-    showBanner('Submit page reached. Clicking Confirm...', '#1565c0');
-;
-
-     setTimeout(() => {
-      confirmWithRetry(state.caseId, 1);
-    }, CONFIG.confirmDelayMs);
-       setTimeout(
-      () => location.assign("https://worker.mturk.com/earnings/"),
-      2500
-    );
+  const state = loadState();
+  if (!state) {
+    showBanner('Submit page reached, but no saved state found.', '#6c757d');
+    return;
   }
 
+  log('Submit page', state);
+
+  saveState({
+    ...state,
+    phase: 'verify_on_earnings',
+    mustReturnToEarnings: true
+  });
+
+  showBanner('Submit page reached. Clicking Confirm...', '#1565c0');
+
+  setTimeout(() => {
+    confirmWithRetry(state.caseId, 1);
+  }, CONFIG.confirmDelayMs);
+
+  setTimeout(() => {
+    showBanner('Redirecting to earnings for verification...', '#1565c0');
+    location.href = '/earnings';
+  }, CONFIG.afterSubmitDelayMs);
+}
+function isHomePage() {
+  return location.pathname === '/';
+}
   function init() {
-    try {
-      if (isEarningsPage()) {
-        handleEarningsPage();
-      } else if (isPaymentSchedulePage()) {
-        handlePaymentSchedulePage();
-      } else if (isSubmitPage()) {
-        handleSubmitPage();
-      }
-    } catch (err) {
-      console.error('[AB2soft] Script error:', err);
-      showBanner(`Script error: ${err.message}`, '#c62828');
+  try {
+    if (isEarningsPage()) {
+      handleEarningsPage();
+    } else if (isPaymentSchedulePage()) {
+      handlePaymentSchedulePage();
+    } else if (isSubmitPage()) {
+      handleSubmitPage();
+    } else if (isHomePage()) {
+      handleHomePage();
     }
+  } catch (err) {
+    console.error('[AB2soft] Script error:', err);
+    showBanner(`Script error: ${err.message}`, '#c62828');
   }
+}
 
   init();
 })();
