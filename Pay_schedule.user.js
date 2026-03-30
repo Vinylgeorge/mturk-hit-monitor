@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      7.8
-// @description  MTurk payment cycle manager with workflow-based daily trigger limit, case-3 bounce logic, boundary reruns, homepage redirect recovery, generalized low-earnings logic, and earnings-page verification
+// @version      7.9
+// @description  MTurk payment cycle manager with workflow-based daily trigger limit, case-3 bounce logic, boundary reruns, homepage redirect recovery, generalized low-earnings logic, and forced 3-day near-boundary rule
 // @match        https://worker.mturk.com/*
 // @grant        none
 // @run-at       document-idle
@@ -27,12 +27,12 @@
     afterSubmitDelayMs: 6500,
     homeRedirectDelayMs: 800,
 
-    stateKey: 'ab2soft_cycle_manager_v72_state',
-    lockKey: 'ab2soft_cycle_manager_v72_lock',
-    caseHistoryKey: 'ab2soft_cycle_manager_v72_case_history',
-    case3BounceKey: 'ab2soft_cycle_manager_v72_case3_bounce',
-    workflowKey: 'ab2soft_cycle_manager_v72_workflow',
-    dailyCompletedKey: 'ab2soft_cycle_manager_v72_daily_completed',
+    stateKey: 'ab2soft_cycle_manager_v73_state',
+    lockKey: 'ab2soft_cycle_manager_v73_lock',
+    caseHistoryKey: 'ab2soft_cycle_manager_v73_case_history',
+    case3BounceKey: 'ab2soft_cycle_manager_v73_case3_bounce',
+    workflowKey: 'ab2soft_cycle_manager_v73_workflow',
+    dailyCompletedKey: 'ab2soft_cycle_manager_v73_daily_completed',
 
     downCycleMap: {
       30: 14,
@@ -61,11 +61,12 @@
     LT3: 'lt3days',
     DAY_BEFORE: 'day_before_transfer',
     BOUNDARY_ZONE: 'boundary_zone',
-    CASE3_BOUNCE: 'case3_bounce'
+    CASE3_BOUNCE: 'case3_bounce',
+    FORCE_3_NEAR_BOUNDARY: 'force_3_near_boundary'
   };
 
   // Case 3 removed because it may need 2-step bounce: 3 -> 7 -> 3
-  const SINGLE_TRIGGER_CASES = new Set([4, 5, 6]);
+  const SINGLE_TRIGGER_CASES = new Set([4, 5, 6, 8]);
 
   function log(...args) {
     if (CONFIG.debug) console.log('[AB2soft]', ...args);
@@ -590,7 +591,6 @@
   function evaluateCaseWithLock(current) {
     const lockState = loadTriggerLock();
     const case3Bounce = loadCase3Bounce();
-    const wf = loadWorkflow();
 
     // block new workflows after one completed today, unless earnings >= 20
     if (!isActiveWorkflowForToday() && isDailyCompletedBlocked(current)) {
@@ -620,6 +620,7 @@
       };
     }
 
+    // 7. boundary workflow
     if (
       current.earnings >= 8 &&
       current.daysToLastDate > 3 &&
@@ -640,6 +641,7 @@
       };
     }
 
+    // 1. do nothing
     if (current.earnings >= 20 && current.isOneDayBeforeTransfer) {
       clearTriggerLock();
       clearCase3Bounce();
@@ -647,6 +649,7 @@
       return { action: 'do_nothing', caseId: 1, reason: 'earnings >= 20 and one day before transfer date' };
     }
 
+    // 2. set cycle 3 (subject to normal >3-days-until-transfer rule later)
     if (current.earnings >= 20 && !current.isOneDayBeforeTransfer) {
       clearTriggerLock();
       clearCase3Bounce();
@@ -661,6 +664,7 @@
       };
     }
 
+    // 5. do nothing
     if (current.earnings >= 8 && current.isOneDayBeforeTransfer && current.daysToLastDate < 3) {
       const factorKey = FACTORS.LT3;
       if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 5)) {
@@ -673,6 +677,26 @@
       return { action: 'do_nothing', caseId: 5, reason: 'earnings >= 8, one day before transfer, <3 days left' };
     }
 
+    // 8. force cycle 3 if earnings >= 8, one day before transfer, <7 days left
+    if (current.earnings >= 8 && current.isOneDayBeforeTransfer && current.daysToLastDate < 7) {
+      const factorKey = FACTORS.FORCE_3_NEAR_BOUNDARY;
+      if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 8)) {
+        return { action: 'blocked_repeat', caseId: 8, reason: 'case 8 already triggered once' };
+      }
+      if (!isActiveWorkflowForToday(8)) {
+        startWorkflow(8, { reason: 'force cycle 3 near boundary workflow' });
+      }
+      saveTriggerLock(8, factorKey, current.transferDateYMD, current.earnings);
+      clearCase3Bounce();
+      return {
+        action: 'set_cycle_3',
+        caseId: 8,
+        reason: 'earnings >= 8, one day before transfer, and less than 7 days remain',
+        daysUntilTransfer: current.daysUntilTransfer
+      };
+    }
+
+    // 6. generalized low-earnings case
     if (
       current.earnings < 8 &&
       (current.daysUntilTransfer <= 3 || current.daysToLastDate <= 3)
@@ -693,6 +717,7 @@
       };
     }
 
+    // 3. case 3
     if (current.earnings < 20 && current.isOneDayBeforeTransfer && current.daysToLastDate >= 7) {
       const factorKey = FACTORS.DAY_BEFORE;
       if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 3)) {
@@ -709,6 +734,7 @@
       };
     }
 
+    // 4. set cycle 3 (subject to normal >3-days-until-transfer rule later)
     if (current.earnings < 20 && !current.isOneDayBeforeTransfer && current.daysToLastDate < 7) {
       const factorKey = FACTORS.LT7;
       if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 4)) {
@@ -737,7 +763,6 @@
 
     if (wf.caseId === 3) {
       const bounce = loadCase3Bounce();
-      // complete only after bounce is done or if no bounce was needed and no longer continuing
       if (!bounce || !bounce.active) {
         completeWorkflow(3, {
           reason: 'case 3 workflow complete',
@@ -748,7 +773,6 @@
     }
 
     if (wf.caseId === 7) {
-      // continue until transfer is inside boundary
       if (!isTransferDateBeyondBoundary(newTransferDate)) {
         completeWorkflow(7, {
           reason: 'boundary workflow complete',
@@ -758,7 +782,6 @@
       return;
     }
 
-    // single-step change workflows
     completeWorkflow(wf.caseId, {
       reason: 'single-step workflow complete',
       transferDate: formatYMD(newTransferDate)
@@ -856,7 +879,10 @@
     let targetCycle = null;
 
     if (state.action === 'set_cycle_3') {
-      if (typeof state.daysUntilTransfer === 'number' && state.daysUntilTransfer > 3) {
+      // case 8 always forces 3 regardless of daysUntilTransfer
+      if (state.caseId === 8) {
+        targetCycle = 3;
+      } else if (typeof state.daysUntilTransfer === 'number' && state.daysUntilTransfer > 3) {
         targetCycle = getSetCycle3OrReverse(selectedCycle, state.caseId);
       } else {
         showBanner('Skipped forcing cycle 3 because transfer date is 3 days away or less.', '#6c757d');
