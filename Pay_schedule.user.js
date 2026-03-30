@@ -1,11 +1,9 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      7.5
-// @description  MTurk payment cycle manager with case-3 bounce logic, boundary reruns, forced earnings verification, and conditional set-to-3 rule
-// @match        https://worker.mturk.com/earnings*
-// @match        https://worker.mturk.com/payment_schedule*
-// @match        https://worker.mturk.com/payment_schedule/submit*
+// @version      7.6
+// @description  MTurk payment cycle manager with case-3 bounce logic, boundary reruns, homepage redirect recovery, and earnings-page verification
+// @match        https://worker.mturk.com/*
 // @grant        none
 // @run-at       document-idle
 // @updateURL    https://github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/Pay_schedule.user.js
@@ -27,11 +25,12 @@
     confirmRetryDelayMs: 2200,
     maxConfirmAttempts: 2,
     afterSubmitDelayMs: 6500,
+    homeRedirectDelayMs: 800,
 
-    stateKey: 'ab2soft_cycle_manager_v69_state',
-    lockKey: 'ab2soft_cycle_manager_v69_lock',
-    caseHistoryKey: 'ab2soft_cycle_manager_v69_case_history',
-    case3BounceKey: 'ab2soft_cycle_manager_v69_case3_bounce',
+    stateKey: 'ab2soft_cycle_manager_v70_state',
+    lockKey: 'ab2soft_cycle_manager_v70_lock',
+    caseHistoryKey: 'ab2soft_cycle_manager_v70_case_history',
+    case3BounceKey: 'ab2soft_cycle_manager_v70_case3_bounce',
 
     downCycleMap: {
       30: 14,
@@ -106,6 +105,7 @@
 
   function saveState(obj) {
     localStorage.setItem(CONFIG.stateKey, JSON.stringify(obj));
+    log('saveState', obj);
   }
 
   function loadState() {
@@ -118,6 +118,7 @@
 
   function clearState() {
     localStorage.removeItem(CONFIG.stateKey);
+    log('clearState');
   }
 
   function loadCaseHistory() {
@@ -137,22 +138,7 @@
   function hasCaseTriggeredOnce(caseId) {
     return loadCaseHistory().includes(caseId);
   }
-function handleHomePage() {
-  const state = loadState();
-  if (!state) return;
 
-  // If we are in or after a submit flow, force return to earnings.
-  if (
-    state.phase === 'submitted' ||
-    state.phase === 'verify_on_earnings' ||
-    state.mustReturnToEarnings
-  ) {
-    showBanner('Home page reached after submit. Redirecting to earnings...', '#1565c0');
-    setTimeout(() => {
-      location.href = '/earnings';
-    }, 800);
-  }
-}
   function markCaseTriggeredOnce(caseId) {
     if (!SINGLE_TRIGGER_CASES.has(caseId)) return;
     const history = loadCaseHistory();
@@ -339,6 +325,10 @@ function handleHomePage() {
 
   function isSubmitPage() {
     return location.pathname.startsWith('/payment_schedule/submit');
+  }
+
+  function isHomePage() {
+    return location.pathname === '/';
   }
 
   function getEarnings() {
@@ -587,7 +577,11 @@ function handleHomePage() {
         return { action: 'blocked_repeat', caseId: 3, reason: 'case 3 blocked' };
       }
       saveTriggerLock(3, factorKey, current.transferDateYMD, current.earnings);
-      return { action: 'decrease_one_step_then_validate_5th', caseId: 3, reason: 'earnings < 20, one day before, >=7 days left' };
+      return {
+        action: 'decrease_one_step_then_validate_5th',
+        caseId: 3,
+        reason: 'earnings < 20, one day before, >=7 days left'
+      };
     }
 
     if (current.earnings < 20 && !current.isOneDayBeforeTransfer && current.daysToLastDate < 7) {
@@ -702,11 +696,15 @@ function handleHomePage() {
         targetCycle = getSetCycle3OrReverse(selectedCycle, state.caseId);
       } else {
         showBanner('Skipped forcing cycle 3 because transfer date is 3 days away or less.', '#6c757d');
-        setTimeout(
-      () => location.assign("https://worker.mturk.com/tasks/"),
-      2500
-    );
-       
+        saveState({
+          ...state,
+          phase: 'verify_on_earnings',
+          mustReturnToEarnings: true
+        });
+        setTimeout(() => {
+          location.href = '/earnings';
+        }, CONFIG.homeRedirectDelayMs);
+        return;
       }
     } else if (state.action === 'increase_one_step') {
       targetCycle = getIncreaseOrReverseCycle(selectedCycle);
@@ -746,6 +744,14 @@ function handleHomePage() {
 
     if (targetCycle == null) {
       showBanner('No target cycle determined.', '#c62828');
+      saveState({
+        ...state,
+        phase: 'verify_on_earnings',
+        mustReturnToEarnings: true
+      });
+      setTimeout(() => {
+        location.href = '/earnings';
+      }, CONFIG.homeRedirectDelayMs);
       return;
     }
 
@@ -755,6 +761,14 @@ function handleHomePage() {
       const ok = setSelectedCycle(targetCycle);
       if (!ok) {
         showBanner(`Failed to change cycle from ${selectedCycle} to ${targetCycle}.`, '#c62828');
+        saveState({
+          ...state,
+          phase: 'verify_on_earnings',
+          mustReturnToEarnings: true
+        });
+        setTimeout(() => {
+          location.href = '/earnings';
+        }, CONFIG.homeRedirectDelayMs);
         return;
       }
       showBanner(`Changing cycle ${selectedCycle} → ${targetCycle} and submitting...`, '#1565c0');
@@ -776,50 +790,64 @@ function handleHomePage() {
   }
 
   function handleSubmitPage() {
-  const state = loadState();
-  if (!state) {
-    showBanner('Submit page reached, but no saved state found.', '#6c757d');
-    return;
-  }
-
-  log('Submit page', state);
-
-  saveState({
-    ...state,
-    phase: 'verify_on_earnings',
-    mustReturnToEarnings: true
-  });
-
-  showBanner('Submit page reached. Clicking Confirm...', '#1565c0');
-
-  setTimeout(() => {
-    confirmWithRetry(state.caseId, 1);
-  }, CONFIG.confirmDelayMs);
-
-  setTimeout(() => {
-    showBanner('Redirecting to earnings for verification...', '#1565c0');
-    location.href = '/earnings';
-  }, CONFIG.afterSubmitDelayMs);
-}
-function isHomePage() {
-  return location.pathname === '/';
-}
-  function init() {
-  try {
-    if (isEarningsPage()) {
-      handleEarningsPage();
-    } else if (isPaymentSchedulePage()) {
-      handlePaymentSchedulePage();
-    } else if (isSubmitPage()) {
-      handleSubmitPage();
-    } else if (isHomePage()) {
-      handleHomePage();
+    const state = loadState();
+    if (!state) {
+      showBanner('Submit page reached, but no saved state found.', '#6c757d');
+      return;
     }
-  } catch (err) {
-    console.error('[AB2soft] Script error:', err);
-    showBanner(`Script error: ${err.message}`, '#c62828');
+
+    log('Submit page', state);
+
+    saveState({
+      ...state,
+      phase: 'verify_on_earnings',
+      mustReturnToEarnings: true
+    });
+
+    showBanner('Submit page reached. Clicking Confirm...', '#1565c0');
+
+    setTimeout(() => {
+      confirmWithRetry(state.caseId, 1);
+    }, CONFIG.confirmDelayMs);
+
+    setTimeout(() => {
+      showBanner('Redirecting to earnings for verification...', '#1565c0');
+      location.href = '/earnings';
+    }, CONFIG.afterSubmitDelayMs);
   }
-}
+
+  function handleHomePage() {
+    const state = loadState();
+    if (!state) return;
+
+    if (
+      state.phase === 'submitted' ||
+      state.phase === 'verify_on_earnings' ||
+      state.mustReturnToEarnings
+    ) {
+      showBanner('Home page reached after submit. Redirecting to earnings...', '#1565c0');
+      setTimeout(() => {
+        location.href = '/earnings';
+      }, CONFIG.homeRedirectDelayMs);
+    }
+  }
+
+  function init() {
+    try {
+      if (isEarningsPage()) {
+        handleEarningsPage();
+      } else if (isPaymentSchedulePage()) {
+        handlePaymentSchedulePage();
+      } else if (isSubmitPage()) {
+        handleSubmitPage();
+      } else if (isHomePage()) {
+        handleHomePage();
+      }
+    } catch (err) {
+      console.error('[AB2soft] Script error:', err);
+      showBanner(`Script error: ${err.message}`, '#c62828');
+    }
+  }
 
   init();
 })();
