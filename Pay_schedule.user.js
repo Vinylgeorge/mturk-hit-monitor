@@ -6,8 +6,8 @@
 // @match        https://worker.mturk.com/*
 // @grant        none
 // @run-at       document-idle
-// @updateURL    https://github.com/mavericpartha/lokesh/raw/refs/heads/main/Pay.user.js
-// @downloadURL  https://github.com/mavericpartha/lokesh/raw/refs/heads/main/Pay.user.js
+// @updateURL    https://github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/Pay_schedule.user.js
+// @downloadURL  https://github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/Pay_schedule.user.js
 // ==/UserScript==
 
 (function () {
