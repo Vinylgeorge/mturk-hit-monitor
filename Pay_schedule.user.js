@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      7.6
-// @description  MTurk payment cycle manager with case-3 bounce logic, boundary reruns, homepage redirect recovery, and earnings-page verification
+// @version      7.7
+// @description  MTurk payment cycle manager with case-3 bounce logic, boundary reruns, homepage redirect recovery, generalized low-earnings logic, and earnings-page verification
 // @match        https://worker.mturk.com/*
 // @grant        none
 // @run-at       document-idle
@@ -27,10 +27,10 @@
     afterSubmitDelayMs: 6500,
     homeRedirectDelayMs: 800,
 
-    stateKey: 'ab2soft_cycle_manager_v70_state',
-    lockKey: 'ab2soft_cycle_manager_v70_lock',
-    caseHistoryKey: 'ab2soft_cycle_manager_v70_case_history',
-    case3BounceKey: 'ab2soft_cycle_manager_v70_case3_bounce',
+    stateKey: 'ab2soft_cycle_manager_v71_state',
+    lockKey: 'ab2soft_cycle_manager_v71_lock',
+    caseHistoryKey: 'ab2soft_cycle_manager_v71_case_history',
+    case3BounceKey: 'ab2soft_cycle_manager_v71_case3_bounce',
 
     downCycleMap: {
       30: 14,
@@ -62,7 +62,7 @@
     CASE3_BOUNCE: 'case3_bounce'
   };
 
-  // Case 3 removed from single-trigger set because it may need 2-step bounce: 3 -> 7 -> 3
+  // Case 3 removed because it may need 2-step bounce: 3 -> 7 -> 3
   const SINGLE_TRIGGER_CASES = new Set([4, 5, 6]);
 
   function log(...args) {
@@ -561,14 +561,22 @@
       return { action: 'do_nothing', caseId: 5, reason: 'earnings >= 8, one day before transfer, <3 days left' };
     }
 
-    if (current.earnings < 8 && current.isOneDayBeforeTransfer && current.daysToLastDate < 3) {
+    // Generalized case 6
+    if (
+      current.earnings < 8 &&
+      (current.daysUntilTransfer <= 3 || current.daysToLastDate <= 3)
+    ) {
       const factorKey = FACTORS.LT3;
       if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 6)) {
         return { action: 'blocked_repeat', caseId: 6, reason: 'case 6 already triggered once' };
       }
       saveTriggerLock(6, factorKey, current.transferDateYMD, current.earnings);
       clearCase3Bounce();
-      return { action: 'increase_one_step', caseId: 6, reason: 'earnings < 8, one day before transfer, <3 days left' };
+      return {
+        action: 'increase_one_step',
+        caseId: 6,
+        reason: 'earnings < 8 and transfer/boundary is within 3 days'
+      };
     }
 
     if (current.earnings < 20 && current.isOneDayBeforeTransfer && current.daysToLastDate >= 7) {
