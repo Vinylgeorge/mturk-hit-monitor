@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      7.3
+// @version      7.4
 // @description  MTurk payment cycle manager with case-3 bounce logic, boundary reruns, forced earnings verification, and conditional set-to-3 rule
 // @match        https://worker.mturk.com/earnings*
 // @match        https://worker.mturk.com/payment_schedule*
@@ -777,7 +777,10 @@
     showBanner('Submit page reached. Clicking Confirm...', '#1565c0');
 ;
 
-    setTimeout(
+     setTimeout(() => {
+      confirmWithRetry(state.caseId, 1);
+    }, CONFIG.confirmDelayMs);
+       setTimeout(
       () => location.assign("https://worker.mturk.com/earnings/"),
       2500
     );
