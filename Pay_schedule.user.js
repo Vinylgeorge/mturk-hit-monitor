@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      7.7
-// @description  MTurk payment cycle manager with case-3 bounce logic, boundary reruns, homepage redirect recovery, generalized low-earnings logic, and earnings-page verification
+// @version      7.8
+// @description  MTurk payment cycle manager with workflow-based daily trigger limit, case-3 bounce logic, boundary reruns, homepage redirect recovery, generalized low-earnings logic, and earnings-page verification
 // @match        https://worker.mturk.com/*
 // @grant        none
 // @run-at       document-idle
-// @updateURL    https://github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/Pay_schedule.user.js
-// @downloadURL  https://github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/Pay_schedule.user.js
+// @updateURL    https://github.com/mavericpartha/lokesh/raw/refs/heads/main/Pay.user.js
+// @downloadURL  https://github.com/mavericpartha/lokesh/raw/refs/heads/main/Pay.user.js
 // ==/UserScript==
 
 (function () {
@@ -27,10 +27,12 @@
     afterSubmitDelayMs: 6500,
     homeRedirectDelayMs: 800,
 
-    stateKey: 'ab2soft_cycle_manager_v71_state',
-    lockKey: 'ab2soft_cycle_manager_v71_lock',
-    caseHistoryKey: 'ab2soft_cycle_manager_v71_case_history',
-    case3BounceKey: 'ab2soft_cycle_manager_v71_case3_bounce',
+    stateKey: 'ab2soft_cycle_manager_v72_state',
+    lockKey: 'ab2soft_cycle_manager_v72_lock',
+    caseHistoryKey: 'ab2soft_cycle_manager_v72_case_history',
+    case3BounceKey: 'ab2soft_cycle_manager_v72_case3_bounce',
+    workflowKey: 'ab2soft_cycle_manager_v72_workflow',
+    dailyCompletedKey: 'ab2soft_cycle_manager_v72_daily_completed',
 
     downCycleMap: {
       30: 14,
@@ -190,6 +192,94 @@
   function clearCase3Bounce() {
     localStorage.removeItem(CONFIG.case3BounceKey);
     log('Case 3 bounce cleared');
+  }
+
+  function loadWorkflow() {
+    try {
+      return JSON.parse(localStorage.getItem(CONFIG.workflowKey) || 'null');
+    } catch {
+      return null;
+    }
+  }
+
+  function saveWorkflow(obj) {
+    localStorage.setItem(CONFIG.workflowKey, JSON.stringify(obj));
+    log('Workflow saved:', obj);
+  }
+
+  function clearWorkflow() {
+    localStorage.removeItem(CONFIG.workflowKey);
+    log('Workflow cleared');
+  }
+
+  function loadDailyCompleted() {
+    try {
+      return JSON.parse(localStorage.getItem(CONFIG.dailyCompletedKey) || 'null');
+    } catch {
+      return null;
+    }
+  }
+
+  function saveDailyCompleted(obj) {
+    localStorage.setItem(CONFIG.dailyCompletedKey, JSON.stringify(obj));
+    log('Daily completed saved:', obj);
+  }
+
+  function clearOldDailyCompleted() {
+    const daily = loadDailyCompleted();
+    if (!daily) return;
+    if (daily.date !== todayYMD()) {
+      localStorage.removeItem(CONFIG.dailyCompletedKey);
+      log('Old daily completed cleared');
+    }
+  }
+
+  function startWorkflow(caseId, meta = {}) {
+    saveWorkflow({
+      date: todayYMD(),
+      caseId,
+      active: true,
+      completed: false,
+      ...meta
+    });
+  }
+
+  function completeWorkflow(caseId, meta = {}) {
+    const existing = loadWorkflow();
+    saveWorkflow({
+      ...(existing || {}),
+      date: todayYMD(),
+      caseId,
+      active: false,
+      completed: true,
+      completedOn: todayYMD(),
+      ...meta
+    });
+    saveDailyCompleted({
+      date: todayYMD(),
+      caseId,
+      ...meta
+    });
+  }
+
+  function isActiveWorkflowForToday(caseId = null) {
+    const wf = loadWorkflow();
+    if (!wf) return false;
+    if (wf.date !== todayYMD()) return false;
+    if (!wf.active || wf.completed) return false;
+    if (caseId == null) return true;
+    return wf.caseId === caseId;
+  }
+
+  function isDailyCompletedBlocked(current) {
+    clearOldDailyCompleted();
+    const daily = loadDailyCompleted();
+    if (!daily) return false;
+
+    // earnings >= 20 must still be allowed through normal case 1 / 2 checks
+    if (current.earnings >= 20) return false;
+
+    return daily.date === todayYMD();
   }
 
   function getPDTDate() {
@@ -500,7 +590,18 @@
   function evaluateCaseWithLock(current) {
     const lockState = loadTriggerLock();
     const case3Bounce = loadCase3Bounce();
+    const wf = loadWorkflow();
 
+    // block new workflows after one completed today, unless earnings >= 20
+    if (!isActiveWorkflowForToday() && isDailyCompletedBlocked(current)) {
+      return {
+        action: 'blocked_repeat',
+        caseId: null,
+        reason: 'daily workflow limit already completed today'
+      };
+    }
+
+    // allow active workflow continuation
     if (
       case3Bounce &&
       case3Bounce.active &&
@@ -508,6 +609,9 @@
       current.isOneDayBeforeTransfer &&
       current.daysToLastDate >= 7
     ) {
+      if (!isActiveWorkflowForToday(3)) {
+        startWorkflow(3, { reason: 'case3 bounce continuation' });
+      }
       saveTriggerLock(3, FACTORS.CASE3_BOUNCE, current.transferDateYMD, current.earnings);
       return {
         action: 'case3_bounce_back_to_3',
@@ -525,6 +629,9 @@
       if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 7)) {
         return { action: 'blocked_repeat', caseId: 7, reason: 'boundary-zone correction already satisfied' };
       }
+      if (!isActiveWorkflowForToday(7)) {
+        startWorkflow(7, { reason: 'boundary correction workflow' });
+      }
       saveTriggerLock(7, factorKey, current.transferDateYMD, current.earnings);
       return {
         action: 'reduce_cycle_to_boundary',
@@ -536,12 +643,16 @@
     if (current.earnings >= 20 && current.isOneDayBeforeTransfer) {
       clearTriggerLock();
       clearCase3Bounce();
+      completeWorkflow(1, { reason: 'do_nothing case 1' });
       return { action: 'do_nothing', caseId: 1, reason: 'earnings >= 20 and one day before transfer date' };
     }
 
     if (current.earnings >= 20 && !current.isOneDayBeforeTransfer) {
       clearTriggerLock();
       clearCase3Bounce();
+      if (!isActiveWorkflowForToday(2)) {
+        startWorkflow(2, { reason: 'earnings >= 20 workflow' });
+      }
       return {
         action: 'set_cycle_3',
         caseId: 2,
@@ -558,10 +669,10 @@
       markCaseTriggeredOnce(5);
       saveTriggerLock(5, factorKey, current.transferDateYMD, current.earnings);
       clearCase3Bounce();
+      completeWorkflow(5, { reason: 'do_nothing case 5' });
       return { action: 'do_nothing', caseId: 5, reason: 'earnings >= 8, one day before transfer, <3 days left' };
     }
 
-    // Generalized case 6
     if (
       current.earnings < 8 &&
       (current.daysUntilTransfer <= 3 || current.daysToLastDate <= 3)
@@ -569,6 +680,9 @@
       const factorKey = FACTORS.LT3;
       if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 6)) {
         return { action: 'blocked_repeat', caseId: 6, reason: 'case 6 already triggered once' };
+      }
+      if (!isActiveWorkflowForToday(6)) {
+        startWorkflow(6, { reason: 'generalized low earnings workflow' });
       }
       saveTriggerLock(6, factorKey, current.transferDateYMD, current.earnings);
       clearCase3Bounce();
@@ -584,6 +698,9 @@
       if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 3)) {
         return { action: 'blocked_repeat', caseId: 3, reason: 'case 3 blocked' };
       }
+      if (!isActiveWorkflowForToday(3)) {
+        startWorkflow(3, { reason: 'case 3 workflow' });
+      }
       saveTriggerLock(3, factorKey, current.transferDateYMD, current.earnings);
       return {
         action: 'decrease_one_step_then_validate_5th',
@@ -597,6 +714,9 @@
       if (shouldBlockRetrigger(lockState, { ...current, factorKey }, 4)) {
         return { action: 'blocked_repeat', caseId: 4, reason: 'case 4 already triggered once' };
       }
+      if (!isActiveWorkflowForToday(4)) {
+        startWorkflow(4, { reason: 'case 4 workflow' });
+      }
       saveTriggerLock(4, factorKey, current.transferDateYMD, current.earnings);
       clearCase3Bounce();
       return {
@@ -609,6 +729,40 @@
 
     clearCase3Bounce();
     return { action: 'no_match', caseId: null, reason: 'no matching condition' };
+  }
+
+  function maybeCompleteWorkflowOnEarnings(state, newTransferDate) {
+    const wf = loadWorkflow();
+    if (!wf || wf.date !== todayYMD() || !wf.active) return;
+
+    if (wf.caseId === 3) {
+      const bounce = loadCase3Bounce();
+      // complete only after bounce is done or if no bounce was needed and no longer continuing
+      if (!bounce || !bounce.active) {
+        completeWorkflow(3, {
+          reason: 'case 3 workflow complete',
+          transferDate: formatYMD(newTransferDate)
+        });
+      }
+      return;
+    }
+
+    if (wf.caseId === 7) {
+      // continue until transfer is inside boundary
+      if (!isTransferDateBeyondBoundary(newTransferDate)) {
+        completeWorkflow(7, {
+          reason: 'boundary workflow complete',
+          transferDate: formatYMD(newTransferDate)
+        });
+      }
+      return;
+    }
+
+    // single-step change workflows
+    completeWorkflow(wf.caseId, {
+      reason: 'single-step workflow complete',
+      transferDate: formatYMD(newTransferDate)
+    });
   }
 
   function handleEarningsPage() {
@@ -636,6 +790,8 @@
       } else {
         showBanner('Returned to earnings page after submit.', '#2e7d32');
       }
+
+      maybeCompleteWorkflowOnEarnings(state, newTransferDate);
       clearState();
       return;
     }
@@ -704,6 +860,7 @@
         targetCycle = getSetCycle3OrReverse(selectedCycle, state.caseId);
       } else {
         showBanner('Skipped forcing cycle 3 because transfer date is 3 days away or less.', '#6c757d');
+        completeWorkflow(state.caseId, { reason: 'set_cycle_3 skipped due to daysUntilTransfer <= 3' });
         saveState({
           ...state,
           phase: 'verify_on_earnings',
