@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      9.1
+// @version      9.2
 // @description  MTurk payment cycle manager with workflow-based daily trigger limit, case-3 bounce logic, boundary reruns, homepage redirect recovery, generalized low-earnings logic, and forced 3-day near-boundary rule
 // @match        https://worker.mturk.com/*
 // @grant        none
@@ -27,9 +27,9 @@
     afterSubmitDelayMs: 6500,
     homeRedirectDelayMs: 800,
 
-    stateKey: 'ab2soft_restructured_state_v81',
-    workflowKey: 'ab2soft_restructured_workflow_v81',
-    slabMemoryKey: 'ab2soft_restructured_slab_memory_v81'
+    stateKey: 'ab2soft_restructured_state_v82',
+    workflowKey: 'ab2soft_restructured_workflow_v82',
+    slabMemoryKey: 'ab2soft_restructured_slab_memory_v82'
   };
 
   const SLABS = {
@@ -69,7 +69,7 @@
         top: '16px',
         right: '16px',
         zIndex: '999999',
-        maxWidth: '500px',
+        maxWidth: '520px',
         padding: '12px 16px',
         borderRadius: '10px',
         boxShadow: '0 8px 24px rgba(0,0,0,.22)',
@@ -332,7 +332,7 @@
     }, CONFIG.submitRetryDelayMs);
   }
 
-  function getConfirmButton() {41 
+  function getConfirmButton() {
     return (
       qs('a[data-method="put"][href*="/payment_schedule/confirm"]') ||
       qs('a.btn.btn-primary[href*="/payment_schedule/confirm"]') ||
@@ -425,7 +425,6 @@
       };
     }
 
-    // Window A: 6th to 20th
     if (ctx.window === 'A') {
       if (ctx.earnings < 20 && ctx.isOneDayBeforeTransfer) {
         return {
@@ -438,7 +437,6 @@
       return null;
     }
 
-    // Window B: 21st to 26th
     if (ctx.window === 'B') {
       if (ctx.earnings < 20 && ctx.isOneDayBeforeTransfer) {
         return {
@@ -451,7 +449,6 @@
       return null;
     }
 
-    // Window C: 27th to 5th
     if (ctx.window === 'C') {
       if (ctx.earnings <= 3) {
         return {
@@ -497,10 +494,11 @@
   function nextCycleTargetFromWorkflow(selectedCycle, wf) {
     const target = wf.targetCycle;
 
+    // FORCE 14
     if (target === 14) {
       if (wf.step === 'START') {
         if (selectedCycle === 14) {
-          return { nextCycle: 7, nextStep: 'AFTER_INTERMEDIATE', note: 'bounce 14 -> 7' };
+          return { nextCycle: 7, nextStep: 'AFTER_INTERMEDIATE', note: 'force bounce 14 -> 7' };
         }
         return { nextCycle: 14, nextStep: 'AFTER_FINAL', note: 'set directly to 14' };
       }
@@ -509,10 +507,11 @@
       }
     }
 
+    // FORCE 7
     if (target === 7) {
       if (wf.step === 'START') {
         if (selectedCycle === 7) {
-          return { nextCycle: 3, nextStep: 'AFTER_INTERMEDIATE', note: 'bounce 7 -> 3' };
+          return { nextCycle: 3, nextStep: 'AFTER_INTERMEDIATE', note: 'force bounce 7 -> 3' };
         }
         return { nextCycle: 7, nextStep: 'AFTER_FINAL', note: 'set directly to 7' };
       }
@@ -521,9 +520,16 @@
       }
     }
 
+    // FORCE 3
     if (target === 3) {
       if (wf.step === 'START') {
+        if (selectedCycle === 3) {
+          return { nextCycle: 7, nextStep: 'AFTER_INTERMEDIATE', note: 'force bounce 3 -> 7' };
+        }
         return { nextCycle: 3, nextStep: 'AFTER_FINAL', note: 'set directly to 3' };
+      }
+      if (wf.step === 'AFTER_INTERMEDIATE') {
+        return { nextCycle: 3, nextStep: 'AFTER_FINAL', note: 'bounce return 7 -> 3' };
       }
     }
 
