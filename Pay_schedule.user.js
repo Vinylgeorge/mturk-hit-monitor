@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      8.0
+// @version      9.1
 // @description  MTurk payment cycle manager with workflow-based daily trigger limit, case-3 bounce logic, boundary reruns, homepage redirect recovery, generalized low-earnings logic, and forced 3-day near-boundary rule
 // @match        https://worker.mturk.com/*
 // @grant        none
@@ -332,7 +332,7 @@
     }, CONFIG.submitRetryDelayMs);
   }
 
-  function getConfirmButton() {
+  function getConfirmButton() {41 
     return (
       qs('a[data-method="put"][href*="/payment_schedule/confirm"]') ||
       qs('a.btn.btn-primary[href*="/payment_schedule/confirm"]') ||
