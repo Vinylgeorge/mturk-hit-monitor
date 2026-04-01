@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      9.3
+// @version      9.4
 // @description  MTurk payment cycle manager with workflow-based daily trigger limit, case-3 bounce logic, boundary reruns, homepage redirect recovery, generalized low-earnings logic, and forced 3-day near-boundary rule
 // @match        https://worker.mturk.com/*
 // @grant        none
@@ -9,6 +9,7 @@
 // @updateURL    https://github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/Pay_schedule.user.js
 // @downloadURL  https://github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/Pay_schedule.user.js
 // ==/UserScript==
+
 
 
 
@@ -29,9 +30,9 @@
     afterSubmitDelayMs: 6500,
     homeRedirectDelayMs: 500,
 
-    stateKey: 'ab2soft_restructured_state_v83',
-    workflowKey: 'ab2soft_restructured_workflow_v83',
-    slabMemoryKey: 'ab2soft_restructured_slab_memory_v83'
+    stateKey: 'ab2soft_restructured_state_v84',
+    workflowKey: 'ab2soft_restructured_workflow_v84',
+    slabMemoryKey: 'ab2soft_restructured_slab_memory_v84'
   };
 
   const SLABS = {
@@ -47,6 +48,7 @@
     R3_FORCE_7_B: 'R3_FORCE_7_B',
     R4_FORCE_14_C_LOW: 'R4_FORCE_14_C_LOW',
     R5_FORCE_7_C_MID: 'R5_FORCE_7_C_MID',
+    R5B_FORCE_3_C_MID: 'R5B_FORCE_3_C_MID',
     R6_FORCE_3_C_HIGH: 'R6_FORCE_3_C_HIGH',
     R7_DO_NOTHING_C_HIGH_LATE: 'R7_DO_NOTHING_C_HIGH_LATE'
   };
@@ -441,12 +443,23 @@
         };
       }
 
+      // C2a: force 7
       if (ctx.earnings > 3 && ctx.earnings <= 7 && ctx.lastDate >= 7) {
         return {
           type: 'TARGET_CYCLE',
           ruleId: RULES.R5_FORCE_7_C_MID,
           targetCycle: 7,
-          reason: '27th to 5th, earnings > 3 and <= 7, lastDate >= 7 -> target 7 days'
+          reason: '27th to 5th, earnings > 3 and <= 7, lastDate >= 7 -> force 7 days'
+        };
+      }
+
+      // C2b: force 3
+      if (ctx.earnings > 3 && ctx.earnings <= 7 && ctx.lastDate > 3 && ctx.lastDate < 7) {
+        return {
+          type: 'TARGET_CYCLE',
+          ruleId: RULES.R5B_FORCE_3_C_MID,
+          targetCycle: 3,
+          reason: '27th to 5th, earnings > 3 and <= 7, lastDate between 4 and 6 -> force 3 days'
         };
       }
 
@@ -476,6 +489,7 @@
   function nextCycleTargetFromWorkflow(selectedCycle, wf) {
     const target = wf.targetCycle;
 
+    // FORCE 14
     if (target === 14) {
       if (wf.step === 'START') {
         if (selectedCycle === 14) {
@@ -488,6 +502,7 @@
       }
     }
 
+    // FORCE 7
     if (target === 7) {
       if (wf.step === 'START') {
         if (selectedCycle === 7) {
@@ -500,6 +515,7 @@
       }
     }
 
+    // FORCE 3
     if (target === 3) {
       if (wf.step === 'START') {
         if (selectedCycle === 3) {
