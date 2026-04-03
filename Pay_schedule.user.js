@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      9.5
+// @version      9.6
 // @description  MTurk payment cycle manager with workflow-based daily trigger limit, case-3 bounce logic, boundary reruns, homepage redirect recovery, generalized low-earnings logic, and forced 3-day near-boundary rule
 // @match        https://worker.mturk.com/*
 // @grant        none
@@ -9,7 +9,6 @@
 // @updateURL    https://github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/Pay_schedule.user.js
 // @downloadURL  https://github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/Pay_schedule.user.js
 // ==/UserScript==
-
 
 
 
@@ -30,9 +29,9 @@
     afterSubmitDelayMs: 6500,
     homeRedirectDelayMs: 500,
 
-    stateKey: 'ab2soft_restructured_state_v84',
-    workflowKey: 'ab2soft_restructured_workflow_v84',
-    slabMemoryKey: 'ab2soft_restructured_slab_memory_v84'
+    stateKey: 'ab2soft_dynamic_state_v91',
+    workflowKey: 'ab2soft_dynamic_workflow_v91',
+    slabMemoryKey: 'ab2soft_dynamic_slab_memory_v91'
   };
 
   const SLABS = {
@@ -44,13 +43,8 @@
 
   const RULES = {
     R1_DO_NOTHING_20: 'R1_DO_NOTHING_20',
-    R2_FORCE_14_A: 'R2_FORCE_14_A',
-    R3_FORCE_7_B: 'R3_FORCE_7_B',
-    R4_FORCE_14_C_LOW: 'R4_FORCE_14_C_LOW',
-    R5_FORCE_7_C_MID: 'R5_FORCE_7_C_MID',
-    R5B_FORCE_3_C_MID: 'R5B_FORCE_3_C_MID',
-    R6_FORCE_3_C_HIGH: 'R6_FORCE_3_C_HIGH',
-    R7_DO_NOTHING_C_HIGH_LATE: 'R7_DO_NOTHING_C_HIGH_LATE'
+    R_DYNAMIC_FORCE: 'R_DYNAMIC_FORCE',
+    R_DYNAMIC_DO_NOTHING: 'R_DYNAMIC_DO_NOTHING'
   };
 
   function log(...args) {
@@ -73,7 +67,7 @@
         top: '16px',
         right: '16px',
         zIndex: '999999',
-        maxWidth: '520px',
+        maxWidth: '540px',
         padding: '12px 16px',
         borderRadius: '10px',
         boxShadow: '0 8px 24px rgba(0,0,0,.22)',
@@ -388,7 +382,7 @@
     return mem.slab !== ctx.slab;
   }
 
-  function startWorkflowForRule(ctx, ruleId, targetCycle) {
+  function startWorkflowForRule(ctx, ruleId, targetCycle, reason) {
     saveWorkflow({
       active: true,
       periodId: ctx.periodId,
@@ -396,8 +390,83 @@
       ruleId,
       targetCycle,
       step: 'START',
-      createdOn: ctx.todayYMD
+      createdOn: ctx.todayYMD,
+      reason
     });
+  }
+
+  function evaluateCandidateCycle(ctx, cycle) {
+    let score = 0;
+    const reasons = [];
+
+    if (ctx.window === 'A') {
+      if (cycle === 14) {
+        score += 100;
+        reasons.push('window A prefers 14');
+      }
+      if (cycle === 7) score += 40;
+      if (cycle === 3) score += 20;
+    }
+
+    if (ctx.window === 'B') {
+      if (cycle === 7) {
+        score += 100;
+        reasons.push('window B prefers 7');
+      }
+      if (cycle === 3) score += 50;
+      if (cycle === 14) score += 20;
+    }
+
+    if (ctx.window === 'C') {
+      if (ctx.earnings <= 3) {
+        if (cycle === 14) {
+          score += 100;
+          reasons.push('low earnings late window prefer 14');
+        }
+        if (cycle === 7) score += 50;
+        if (cycle === 3) score += 20;
+      }
+
+      if (ctx.earnings > 3 && ctx.earnings <= 7.99) {
+        if (ctx.lastDate >= 7) {
+          if (cycle === 7) {
+            score += 100;
+            reasons.push('mid earnings, enough days, prefer 7');
+          }
+          if (cycle === 3) score += 45;
+          if (cycle === 14) score += 20;
+        } else if (ctx.lastDate >= 3 && ctx.lastDate < 7) {
+          if (cycle === 3) {
+            score += 100;
+            reasons.push('mid earnings, tighter boundary, prefer 3');
+          }
+          if (cycle === 7) score += 40;
+          if (cycle === 14) score += 10;
+        }
+      }
+
+      if (ctx.earnings >= 8 && ctx.earnings < 20) {
+        if (ctx.lastDate >= 3) {
+          if (cycle === 3) {
+            score += 100;
+            reasons.push('high mid earnings late window prefer 3');
+          }
+          if (cycle === 7) score += 35;
+          if (cycle === 14) score += 10;
+        }
+      }
+    }
+
+    return { cycle, score, reasons };
+  }
+
+  function chooseDynamicTargetCycle(ctx) {
+    const candidates = [3, 7, 14];
+    const ranked = candidates
+      .map(cycle => evaluateCandidateCycle(ctx, cycle))
+      .sort((a, b) => b.score - a.score);
+
+    return ranked[0];
   }
 
   function decideRule(ctx) {
@@ -409,87 +478,31 @@
       };
     }
 
-    if (ctx.window === 'A') {
-      if (ctx.earnings < 20 && ctx.isOneDayBeforeTransfer) {
-        return {
-          type: 'TARGET_CYCLE',
-          ruleId: RULES.R2_FORCE_14_A,
-          targetCycle: 14,
-          reason: '6th to 20th, earnings < 20, one day before transfer -> target 14 days'
-        };
-      }
+    if (ctx.window === 'C' && ctx.earnings >= 8 && ctx.earnings < 20 && ctx.lastDate < 3) {
+      return {
+        type: 'DO_NOTHING',
+        ruleId: RULES.R_DYNAMIC_DO_NOTHING,
+        reason: 'window C, earnings >= 8 and < 20, lastDate < 3 -> do nothing'
+      };
+    }
+
+    const best = chooseDynamicTargetCycle(ctx);
+
+    if (!best || best.score <= 0) {
       return null;
     }
 
-    if (ctx.window === 'B') {
-      if (ctx.earnings < 20 && ctx.isOneDayBeforeTransfer) {
-        return {
-          type: 'TARGET_CYCLE',
-          ruleId: RULES.R3_FORCE_7_B,
-          targetCycle: 7,
-          reason: '21st to 26th, earnings < 20, one day before transfer -> target 7 days'
-        };
-      }
-      return null;
-    }
-
-    if (ctx.window === 'C') {
-      if (ctx.earnings <= 3) {
-        return {
-          type: 'TARGET_CYCLE',
-          ruleId: RULES.R4_FORCE_14_C_LOW,
-          targetCycle: 14,
-          reason: '27th to 5th, earnings <= 3 -> target 14 days'
-        };
-      }
-
-      // C2a: force 7
-      if (ctx.earnings > 3 && ctx.earnings <= 7.99 && ctx.lastDate >= 7.) {
-        return {
-          type: 'TARGET_CYCLE',
-          ruleId: RULES.R5_FORCE_7_C_MID,
-          targetCycle: 7,
-          reason: '27th to 5th, earnings > 3 and <= 7, lastDate >= 7 -> force 7 days'
-        };
-      }
-
-      // C2b: force 3
-      if (ctx.earnings > 3 && ctx.earnings <= 7.99 && ctx.lastDate > 3 && ctx.lastDate < 7) {
-        return {
-          type: 'TARGET_CYCLE',
-          ruleId: RULES.R5B_FORCE_3_C_MID,
-          targetCycle: 3,
-          reason: '27th to 5th, earnings > 3 and <= 7.99, lastDate between 4 and 6 -> force 3 days'
-        };
-      }
-
-      if (ctx.earnings >= 8 && ctx.earnings < 20 && ctx.lastDate >= 3) {
-        return {
-          type: 'TARGET_CYCLE',
-          ruleId: RULES.R6_FORCE_3_C_HIGH,
-          targetCycle: 3,
-          reason: '27th to 5th, earnings >= 8 and < 20, lastDate >= 3 -> target 3 days'
-        };
-      }
-
-      if (ctx.earnings >= 8 && ctx.earnings < 20 && ctx.lastDate < 3) {
-        return {
-          type: 'DO_NOTHING',
-          ruleId: RULES.R7_DO_NOTHING_C_HIGH_LATE,
-          reason: '27th to 5th, earnings >= 8 and < 20, lastDate < 3 -> do nothing'
-        };
-      }
-
-      return null;
-    }
-
-    return null;
+    return {
+      type: 'TARGET_CYCLE',
+      ruleId: RULES.R_DYNAMIC_FORCE,
+      targetCycle: best.cycle,
+      reason: `dynamic choice -> ${best.cycle} days (${best.reasons.join(', ')})`
+    };
   }
 
   function nextCycleTargetFromWorkflow(selectedCycle, wf) {
     const target = wf.targetCycle;
 
-    // FORCE 14
     if (target === 14) {
       if (wf.step === 'START') {
         if (selectedCycle === 14) {
@@ -502,7 +515,6 @@
       }
     }
 
-    // FORCE 7
     if (target === 7) {
       if (wf.step === 'START') {
         if (selectedCycle === 7) {
@@ -515,7 +527,6 @@
       }
     }
 
-    // FORCE 3
     if (target === 3) {
       if (wf.step === 'START') {
         if (selectedCycle === 3) {
@@ -607,7 +618,7 @@
     }
 
     if (decision.type === 'TARGET_CYCLE') {
-      startWorkflowForRule(ctx, decision.ruleId, decision.targetCycle);
+      startWorkflowForRule(ctx, decision.ruleId, decision.targetCycle, decision.reason);
 
       saveState({
         phase: 'OPEN_PAYMENT_SCHEDULE',
