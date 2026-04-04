@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      9.7
-// @description  MTurk payment cycle manager with workflow-based daily trigger limit, case-3 bounce logic, boundary reruns, homepage redirect recovery, generalized low-earnings logic, and forced 3-day near-boundary rule
+// @version      9.8
 // @match        https://worker.mturk.com/*
 // @grant        none
 // @run-at       document-idle
 // @updateURL    https://github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/Pay_schedule.user.js
 // @downloadURL  https://github.com/Vinylgeorge/mturk-hit-monitor/raw/refs/heads/main/Pay_schedule.user.js
 // ==/UserScript==
+
 
 
 
@@ -29,9 +29,9 @@
     afterSubmitDelayMs: 6500,
     homeRedirectDelayMs: 500,
 
-    stateKey: 'ab2soft_dynamic_state_v91',
-    workflowKey: 'ab2soft_dynamic_workflow_v91',
-    slabMemoryKey: 'ab2soft_dynamic_slab_memory_v91'
+    stateKey: 'ab2soft_dynamic_state_v92',
+    workflowKey: 'ab2soft_dynamic_workflow_v92',
+    slabMemoryKey: 'ab2soft_dynamic_slab_memory_v92'
   };
 
   const SLABS = {
@@ -137,9 +137,7 @@
 
   function getPDTDate() {
     const now = new Date();
-    const pdtString = now.toLocaleString('en-US', {
-      timeZone: 'America/Los_Angeles'
-    });
+    const pdtString = now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' });
     const pdt = new Date(pdtString);
     pdt.setHours(0, 0, 0, 0);
     return pdt;
@@ -156,7 +154,7 @@
   }
 
   function formatYMD(date) {
-    if (!(date instanceof Date) || isNaN(date.getTime())) return '';
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
     const d = new Date(date);
     d.setHours(0, 0, 0, 0);
     return d.toISOString().slice(0, 10);
@@ -170,10 +168,16 @@
 
   function parseDate(text) {
     if (!text) return null;
-    const m = text.match(/\b([A-Z][a-z]{2}\s+\d{1,2},\s+\d{4})\b/);
+    const m = text.match(/\b([A-Z][a-z]{2}\s+\d{1,2}(?:,\s*\d{4})?)\b/);
     if (!m) return null;
-    const d = new Date(m[1]);
-    if (isNaN(d.getTime())) return null;
+
+    let raw = m[1].replace(/\s+/g, ' ').trim();
+    if (!/,/.test(raw)) {
+      raw = `${raw}, ${today().getFullYear()}`;
+    }
+
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return null;
     d.setHours(0, 0, 0, 0);
     return d;
   }
@@ -209,15 +213,15 @@
     const day = baseDate.getDate();
     if (day >= 6 && day <= 20) return 'A';
     if (day >= 21 && day <= 26) return 'B';
-    return 'C'; // 27..end and 1..5
+    return 'C';
   }
 
   function getEarningSlab(earnings) {
-  if (earnings >= 20) return SLABS.S20_PLUS;
-  if (earnings >= 8) return SLABS.S8_TO_19;
-  if (earnings > 3 && earnings <= 7.99) return SLABS.S3_TO_7;
-  return SLABS.S0_TO_3;
-}
+    if (earnings >= 20) return SLABS.S20_PLUS;
+    if (earnings >= 8) return SLABS.S8_TO_19;
+    if (earnings > 3 && earnings <= 7.99) return SLABS.S3_TO_7;
+    return SLABS.S0_TO_3;
+  }
 
   function isOneDayBeforeTransfer(transferDate) {
     return formatYMD(transferDate) === formatYMD(getTomorrowPDT());
@@ -240,11 +244,13 @@
   }
 
   function getEarnings() {
-    return parseMoney(qs('.current-earnings h2')?.textContent || '');
+    return parseMoney(qs('.current-earnings h2')?.textContent || document.body.innerText || '');
   }
 
   function getTransferDate() {
-    return parseDate(qs('.current-earnings strong')?.textContent || '');
+    const strongText = qs('.current-earnings strong')?.textContent || '';
+    const bodyText = document.body.innerText || '';
+    return parseDate(strongText) || parseDate(bodyText);
   }
 
   function getSelectedCycle() {
@@ -348,7 +354,7 @@
     }, CONFIG.confirmRetryDelayMs);
   }
 
-  function buildContext(earnings, transferDate) {
+  function buildContext(earnings, transferDate, currentCycle) {
     const baseDate = today();
     return {
       today: baseDate,
@@ -356,6 +362,7 @@
       earnings,
       transferDate,
       transferDateYMD: formatYMD(transferDate),
+      currentCycle,
       isOneDayBeforeTransfer: isOneDayBeforeTransfer(transferDate),
       periodId: getCyclePeriodId(baseDate),
       window: getWindow(baseDate),
@@ -403,18 +410,22 @@
       if (cycle === 14) {
         score += 100;
         reasons.push('window A prefers 14');
+      } else if (cycle === 7) {
+        score += 40;
+      } else if (cycle === 3) {
+        score += 20;
       }
-      if (cycle === 7) score += 40;
-      if (cycle === 3) score += 20;
     }
 
     if (ctx.window === 'B') {
       if (cycle === 7) {
         score += 100;
         reasons.push('window B prefers 7');
+      } else if (cycle === 3) {
+        score += 50;
+      } else if (cycle === 14) {
+        score += 20;
       }
-      if (cycle === 3) score += 50;
-      if (cycle === 14) score += 20;
     }
 
     if (ctx.window === 'C') {
@@ -422,37 +433,50 @@
         if (cycle === 14) {
           score += 100;
           reasons.push('low earnings late window prefer 14');
+        } else if (cycle === 7) {
+          score += 50;
+        } else if (cycle === 3) {
+          score += 20;
         }
-        if (cycle === 7) score += 50;
-        if (cycle === 3) score += 20;
-      }
-
-      if (ctx.earnings > 3 && ctx.earnings <= 7.99) {
+      } else if (ctx.earnings > 3 && ctx.earnings <= 7.99) {
         if (ctx.lastDate >= 7) {
           if (cycle === 7) {
             score += 100;
             reasons.push('mid earnings, enough days, prefer 7');
+          } else if (cycle === 3) {
+            score += 45;
+          } else if (cycle === 14) {
+            score += 20;
           }
-          if (cycle === 3) score += 45;
-          if (cycle === 14) score += 20;
         } else if (ctx.lastDate >= 3 && ctx.lastDate < 7) {
           if (cycle === 3) {
             score += 100;
             reasons.push('mid earnings, tighter boundary, prefer 3');
+          } else if (cycle === 7) {
+            score += 40;
+          } else if (cycle === 14) {
+            score += 10;
           }
-          if (cycle === 7) score += 40;
-          if (cycle === 14) score += 10;
+        } else if (ctx.lastDate < 3) {
+          if (cycle === 3) {
+            score += 100;
+            reasons.push('mid earnings, very late boundary, still prefer 3');
+          } else if (cycle === 7) {
+            score += 25;
+          } else if (cycle === 14) {
+            score += 0;
+          }
         }
-      }
-
-      if (ctx.earnings >= 8 && ctx.earnings < 20) {
+      } else if (ctx.earnings >= 8 && ctx.earnings < 20) {
         if (ctx.lastDate >= 3) {
           if (cycle === 3) {
             score += 100;
             reasons.push('high mid earnings late window prefer 3');
+          } else if (cycle === 7) {
+            score += 35;
+          } else if (cycle === 14) {
+            score += 10;
           }
-          if (cycle === 7) score += 35;
-          if (cycle === 14) score += 10;
         }
       }
     }
@@ -466,7 +490,13 @@
       .map(cycle => evaluateCandidateCycle(ctx, cycle))
       .sort((a, b) => b.score - a.score);
 
-    return ranked[0];
+    const best = ranked[0];
+    if (!best || best.score <= 0) return null;
+
+    return {
+      targetCycle: best.cycle,
+      reason: best.reasons.join(', ')
+    };
   }
 
   function decideRule(ctx) {
@@ -482,21 +512,20 @@
       return {
         type: 'DO_NOTHING',
         ruleId: RULES.R_DYNAMIC_DO_NOTHING,
-        reason: 'window C, earnings >= 8 and < 20, lastDate < 3 -> do nothing'
+        reason: 'window C, earnings >= 8 and < 20, lastDate < 3'
       };
     }
 
     const best = chooseDynamicTargetCycle(ctx);
-
-    if (!best || best.score <= 0) {
-      return null;
+    if (!best) {
+      return { type: 'NO_ACTION', reason: 'no dynamic target found' };
     }
 
     return {
       type: 'TARGET_CYCLE',
       ruleId: RULES.R_DYNAMIC_FORCE,
-      targetCycle: best.cycle,
-      reason: `dynamic choice -> ${best.cycle} days (${best.reasons.join(', ')})`
+      targetCycle: best.targetCycle,
+      reason: `dynamic choice -> ${best.targetCycle} days (${best.reason})`
     };
   }
 
@@ -554,11 +583,15 @@
       return;
     }
 
+    const currentCycle = getSelectedCycleFromMemoryOrPage();
+    if (!currentCycle) {
+      showBanner('Could not detect current cycle.', '#c62828');
+      return;
+    }
+
     if (state && state.phase === 'VERIFY_ON_EARNINGS') {
       const newTransferDate = getTransferDate();
-      const oldTransferDate = state.originalTransferDate
-        ? new Date(state.originalTransferDate + 'T00:00:00')
-        : null;
+      const oldTransferDate = state.originalTransferDate ? new Date(state.originalTransferDate + 'T00:00:00') : null;
 
       if (oldTransferDate && newTransferDate && formatYMD(oldTransferDate) !== formatYMD(newTransferDate)) {
         showBanner(
@@ -572,7 +605,7 @@
       clearState();
     }
 
-    const ctx = buildContext(earnings, transferDate);
+    const ctx = buildContext(earnings, transferDate, currentCycle);
     const wf = loadWorkflow();
 
     if (wf && wf.active && wf.periodId === ctx.periodId) {
@@ -606,7 +639,7 @@
 
     const decision = decideRule(ctx);
 
-    if (!decision) {
+    if (decision.type === 'NO_ACTION') {
       showBanner('No condition matched. No action taken.', '#6c757d');
       return;
     }
@@ -635,6 +668,25 @@
         }, CONFIG.redirectDelayMs);
       }
     }
+  }
+
+  function getSelectedCycleFromMemoryOrPage() {
+    if (isPaymentSchedulePage()) {
+      return getSelectedCycle();
+    }
+
+    const wf = loadWorkflow();
+    const state = loadState();
+    if (wf?.active && typeof wf.targetCycle === 'number') {
+      const last = wf.lastMove?.to;
+      if (last) return last;
+    }
+    if (state?.nextCycle) return state.nextCycle;
+    return readCurrentCycleViaSchedulePageFallback();
+  }
+
+  function readCurrentCycleViaSchedulePageFallback() {
+    return null;
   }
 
   function handlePaymentSchedulePage() {
