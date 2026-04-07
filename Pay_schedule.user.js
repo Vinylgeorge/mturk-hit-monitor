@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      9.9
+// @version      10
 // @match        https://worker.mturk.com/*
 // @grant        none
 // @run-at       document-idle
@@ -355,6 +355,7 @@
       transferDate,
       transferDateYMD: formatYMD(transferDate),
       isOneDayBeforeTransfer: isOneDayBeforeTransfer(transferDate),
+      daysUntilTransfer: transferDate ? Math.floor((transferDate.getTime() - baseDate.getTime()) / 86400000) : 0,
       periodId: getCyclePeriodId(baseDate),
       window: getWindow(baseDate),
       slab: getEarningSlab(earnings),
@@ -460,6 +461,7 @@
           if (cycle === 14) score += 10;
         }
       }
+
     }
 
     return { cycle, score, reasons };
@@ -475,19 +477,36 @@
   }
 
   function decideRule(ctx) {
-    if (ctx.earnings >= 20 && ctx.isOneDayBeforeTransfer) {
+    if (ctx.earnings >= 20 && ctx.daysUntilTransfer > 3) {
       return {
-        type: 'DO_NOTHING',
-        ruleId: RULES.R1_DO_NOTHING_20,
-        reason: 'earnings >= 20 and today is one day before transfer date'
+        type: 'TARGET_CYCLE',
+        ruleId: RULES.R_DYNAMIC_FORCE,
+        targetCycle: 3,
+        reason: `earnings >= 20, ${ctx.daysUntilTransfer} days to transfer (> 3) -> force cycle 3`
       };
     }
 
-    if (ctx.window === 'C' && ctx.earnings >= 8 && ctx.lastDate < 3) {
+    if (ctx.earnings >= 20) {
+      return {
+        type: 'DO_NOTHING',
+        ruleId: RULES.R1_DO_NOTHING_20,
+        reason: `earnings >= 20, ${ctx.daysUntilTransfer} days to transfer (<= 3) -> do nothing`
+      };
+    }
+
+    if (!ctx.isOneDayBeforeTransfer) {
       return {
         type: 'DO_NOTHING',
         ruleId: RULES.R_DYNAMIC_DO_NOTHING,
-        reason: 'window C, earnings >= 8, lastDate < 3 -> do nothing'
+        reason: `not one day before transfer (${ctx.daysUntilTransfer} days away) -> wait`
+      };
+    }
+
+    if (ctx.window === 'C' && ctx.earnings >= 8 && ctx.earnings < 20 && ctx.lastDate < 3) {
+      return {
+        type: 'DO_NOTHING',
+        ruleId: RULES.R_DYNAMIC_DO_NOTHING,
+        reason: 'window C, earnings >= 8 and < 20, lastDate < 3 -> do nothing'
       };
     }
 
