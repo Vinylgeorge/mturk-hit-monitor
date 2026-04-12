@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      10
+// @version      10.1
 // @match        https://worker.mturk.com/*
 // @grant        none
 // @run-at       document-idle
@@ -790,6 +790,9 @@
       showBanner(`Script error: ${err.message}`, '#c62828');
     }
   }
-
+setTimeout(
+      () => location.assign("https://worker.mturk.com/tasks/"),
+      2500
+    );
   init();
 })();
