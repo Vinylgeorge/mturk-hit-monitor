@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AB2soft MTurk Payment Cycle Manager
 // @namespace    AB2soft
-// @version      10.3
+// @version      10.4
 // @match        https://worker.mturk.com/*
 // @grant        none
 // @run-at       document-idle
@@ -603,10 +603,7 @@
       if (wf.step === 'AFTER_FINAL') {
         completeSlabTrigger(ctx, wf.ruleId, 'workflow complete');
         showBanner(`Completed workflow for slab ${ctx.slab}.`, '#2e7d32');
-        setTimeout(() => {
-    location.assign("https://worker.mturk.com/tasks/");
-  }, 2500);
-
+        
         return;
       }
 
