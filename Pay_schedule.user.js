@@ -1,7 +1,6 @@
 // ==UserScript==
-// @name         AB2soft MTurk Payment Cycle Manager
-// @namespace    AB2soft
-// @version      10.4
+// @name         MTurk Payment Cycle Manager
+// @version      11
 // @match        https://worker.mturk.com/*
 // @grant        none
 // @run-at       document-idle
@@ -27,9 +26,9 @@
     afterSubmitDelayMs: 6500,
     homeRedirectDelayMs: 500,
 
-    stateKey: 'ab2soft_dynamic_state_v91',
-    workflowKey: 'ab2soft_dynamic_workflow_v91',
-    slabMemoryKey: 'ab2soft_dynamic_slab_memory_v91'
+    stateKey: 'ab3soft_dynamic_state_v91',
+    workflowKey: 'ab3soft_dynamic_workflow_v91',
+    slabMemoryKey: 'ab3soft_dynamic_slab_memory_v91'
   };
 
   const SLABS = {
@@ -46,7 +45,7 @@
   };
 
   function log(...args) {
-    if (CONFIG.debug) console.log('[AB2soft]', ...args);
+    if (CONFIG.debug) console.log('[ab3soft]', ...args);
   }
 
   function qs(selector, root = document) {
@@ -54,7 +53,7 @@
   }
 
   function showBanner(message, color = '#1565c0') {
-    const id = 'ab2soft-cycle-banner';
+    const id = 'ab3soft-cycle-banner';
     let el = document.getElementById(id);
 
     if (!el) {
@@ -787,7 +786,7 @@
         handleHomePage();
       }
     } catch (err) {
-      console.error('[AB2soft] Script error:', err);
+      console.error('[ab3soft] Script error:', err);
       showBanner(`Script error: ${err.message}`, '#c62828');
     }
   }
