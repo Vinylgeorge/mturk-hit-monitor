@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         MTurk Payment Cycle Manager
-// @version      12
+// @version      15
 // @match        https://worker.mturk.com/*
 // @grant        none
 // @run-at       document-idle
@@ -623,7 +623,7 @@
       return;
     }
 
-    if (!shouldStartNewTrigger(ctx)) {
+    if (!ctx.isOneDayBeforeTransfer && !shouldStartNewTrigger(ctx)) {
       showBanner(`No action: slab ${ctx.slab} already handled for current cycle period.`, '#6c757d');
       return;
     }
